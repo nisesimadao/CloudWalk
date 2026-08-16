@@ -62,6 +62,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var lowPowerMode = false
     private var progressTicker: Runnable? = null
     private var playbackServiceStop: Runnable? = null
+    private var sleepTimerRunnable: Runnable? = null
+    private var sleepAtTrackEnd = false
     private var overlay: View? = null
     private val overlayStack = ArrayDeque<View>()
     private var lastBackHandledAt = 0L
@@ -979,6 +981,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 }
             }
             addView(nowPlayingLike, Toolbar.LayoutParams(dp(48), -1).apply { gravity = Gravity.END })
+            menu.add(getString(R.string.sleep_timer))
+            setOnMenuItemClickListener { item ->
+                if (item.title == getString(R.string.sleep_timer)) { showSleepTimerDialog(); true } else false
+            }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         val content = LinearLayout(this).apply {
@@ -1321,6 +1327,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             menu.add(0, 1, 0, getString(R.string.cover_flow)); menu.add(0, 2, 1, getString(R.string.track_list))
             menu.add(0, 3, 2, if (lowPowerMode) getString(R.string.disable_low_power) else getString(R.string.enable_low_power))
             menu.add(0, 5, 3, getString(R.string.session_cache_size))
+            menu.add(0, 6, 4, getString(R.string.sleep_timer))
             selectedTrack?.takeIf { playback.canSessionCache(it) }?.let { track ->
                 menu.add(0, 4, 4, if (playback.isSessionCached(track)) getString(R.string.cached_for_session) else getString(R.string.keep_for_session))
             }
@@ -1335,6 +1342,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         toast(if (lowPowerMode) getString(R.string.low_power_on) else getString(R.string.low_power_off))
                     }
                     5 -> showCacheSizeDialog()
+                    6 -> showSleepTimerDialog()
                     4 -> {
                         val track = selectedTrack
                         if (track != null) {
@@ -1349,6 +1357,48 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
     }
 
+
+    private fun showSleepTimerDialog() {
+        val labels = arrayOf(
+            getString(R.string.sleep_off),
+            getString(R.string.sleep_15),
+            getString(R.string.sleep_30),
+            getString(R.string.sleep_60),
+            getString(R.string.sleep_end_track)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.sleep_timer))
+            .setItems(labels) { _, which ->
+                when (which) {
+                    0 -> cancelSleepTimer(true)
+                    1 -> setSleepTimer(15, labels[1])
+                    2 -> setSleepTimer(30, labels[2])
+                    3 -> setSleepTimer(60, labels[3])
+                    4 -> {
+                        cancelSleepTimer(false)
+                        sleepAtTrackEnd = true
+                        toast(getString(R.string.sleep_set, labels[4]))
+                    }
+                }
+            }.show()
+    }
+
+    private fun setSleepTimer(minutes: Int, label: String) {
+        cancelSleepTimer(false)
+        sleepTimerRunnable = Runnable {
+            playback.pause()
+            sleepTimerRunnable = null
+            sleepAtTrackEnd = false
+        }.also { main.postDelayed(it, minutes * 60_000L) }
+        toast(getString(R.string.sleep_set, label))
+    }
+
+    private fun cancelSleepTimer(showToast: Boolean) {
+        sleepTimerRunnable?.let(main::removeCallbacks)
+        sleepTimerRunnable = null
+        sleepAtTrackEnd = false
+        if (showToast) toast(getString(R.string.sleep_cancelled))
+    }
 
     private fun showCacheSizeDialog() {
         val labels = ArrayList<String>()
@@ -1565,6 +1615,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
     override fun onCompleted(track: Track) {
         playing = false
         stopProgressTicker()
+        if (sleepAtTrackEnd) {
+            sleepAtTrackEnd = false
+            cancelSleepTimer(false)
+            updatePlayButton()
+            updateMediaSession()
+            schedulePlaybackKeepAliveStop()
+            return
+        }
         progress.progress = 0
         nowPlayingSeek?.progress = 0
         if (repeatMode == RepeatMode.ONE) {
@@ -1618,6 +1676,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     override fun onDestroy() {
         stopProgressTicker()
+        cancelSleepTimer(false)
         stopPlaybackKeepAliveNow()
         playback.release()
         artwork.close()

@@ -23,4 +23,12 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="home_empty">SoundCloudを検索して曲を見つけよう</string>
     <string name="search_failed">SoundCloudを検索できませんでした</string>
     <string name="artist_tracks">このアーティストの曲</string>
+    <string name="sleep_timer">スリープタイマー</string>
+    <string name="sleep_off">OFF</string>
+    <string name="sleep_15">15分</string>
+    <string name="sleep_30">30分</string>
+    <string name="sleep_60">60分</string>
+    <string name="sleep_end_track">曲の終わり</string>
+    <string name="sleep_set">スリープタイマー: %1$s</string>
+    <string name="sleep_cancelled">スリープタイマーOFF</string>
 </resources>

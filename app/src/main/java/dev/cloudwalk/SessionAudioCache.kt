@@ -11,14 +11,19 @@ class SessionAudioCache(
     private val settings: CacheSettings = CacheSettings(context)
 ) {
     private val appContext = context.applicationContext
-    private val dir = File(appContext.cacheDir, "session_audio")
+    private val rootDir = File(appContext.cacheDir, "session_audio")
+    private val dir = File(rootDir, "session_${System.currentTimeMillis()}_${android.os.Process.myPid()}")
     private val io = Executors.newSingleThreadExecutor()
     private val registry = LinkedHashMap<String, Track>()
     private val registryLock = Any()
 
     init {
-        if (dir.exists()) dir.deleteRecursively()
         dir.mkdirs()
+        io.execute {
+            rootDir.listFiles()?.forEach { stale ->
+                if (stale != dir) runCatching { stale.deleteRecursively() }
+            }
+        }
     }
 
     fun cachedFile(track: Track): File? {
@@ -104,6 +109,7 @@ class SessionAudioCache(
 
     fun close() {
         clear()
+        runCatching { dir.delete() }
         io.shutdownNow()
     }
 

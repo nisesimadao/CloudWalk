@@ -23,4 +23,12 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="home_empty">Search SoundCloud to get started</string>
     <string name="search_failed">Couldn’t search SoundCloud</string>
     <string name="artist_tracks">More from this artist</string>
+    <string name="sleep_timer">Sleep timer</string>
+    <string name="sleep_off">Off</string>
+    <string name="sleep_15">15 minutes</string>
+    <string name="sleep_30">30 minutes</string>
+    <string name="sleep_60">60 minutes</string>
+    <string name="sleep_end_track">End of track</string>
+    <string name="sleep_set">Sleep timer: %1$s</string>
+    <string name="sleep_cancelled">Sleep timer off</string>
 </resources>
