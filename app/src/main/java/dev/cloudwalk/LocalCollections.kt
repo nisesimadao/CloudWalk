@@ -7,25 +7,37 @@ import org.json.JSONObject
 /** Tiny SharedPreferences-backed user collection for the free/public mode. */
 class LocalCollections(context: Context) {
     private val prefs = context.getSharedPreferences("cloudwalk_collections", Context.MODE_PRIVATE)
+    private val lock = Any()
+    @Volatile private var likesCache: List<Track>? = null
+    @Volatile private var recentCache: List<Track>? = null
 
-    fun likes(): List<Track> = read("likes")
-    fun recent(): List<Track> = read("recent")
+    fun likes(): List<Track> = likesCache ?: synchronized(lock) {
+        likesCache ?: read("likes").also { likesCache = it }
+    }
+
+    fun recent(): List<Track> = recentCache ?: synchronized(lock) {
+        recentCache ?: read("recent").also { recentCache = it }
+    }
 
     fun isLiked(track: Track): Boolean = likes().any { it.id == track.id }
 
-    fun toggleLike(track: Track): Boolean {
+    fun toggleLike(track: Track): Boolean = synchronized(lock) {
         val current = likes().toMutableList()
         val existing = current.indexOfFirst { it.id == track.id }
         val liked = existing < 0
         if (liked) current.add(0, track) else current.removeAt(existing)
-        write("likes", current.take(MAX_LIKES))
-        return liked
+        val snapshot = current.take(MAX_LIKES)
+        likesCache = snapshot
+        write("likes", snapshot)
+        liked
     }
 
-    fun addRecent(track: Track) {
+    fun addRecent(track: Track) = synchronized(lock) {
         val current = recent().filterNot { it.id == track.id }.toMutableList()
         current.add(0, track)
-        write("recent", current.take(MAX_RECENT))
+        val snapshot = current.take(MAX_RECENT)
+        recentCache = snapshot
+        write("recent", snapshot)
     }
 
     private fun read(key: String): List<Track> {
@@ -47,7 +59,7 @@ class LocalCollections(context: Context) {
                 localUri = o.optString("local").ifBlank { null }
             )
         }
-        return out
+        return out.toList()
     }
 
     private fun write(key: String, tracks: List<Track>) {
