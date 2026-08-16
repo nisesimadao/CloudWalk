@@ -668,15 +668,24 @@ class MainActivity : Activity(), PlaybackController.Listener {
         data.clipData?.let { clip ->
             for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
         } ?: data.data?.let(uris::add)
-        var added = 0
-        for (uri in uris.distinct()) {
+        val readable = uris.distinct().filter { uri ->
             runCatching {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                library.add(uri)
-            }.onSuccess { added++ }
+            }.isSuccess
         }
-        toast(resources.getQuantityString(R.plurals.added_tracks, added, added))
-        showLocalFiles()
+        if (readable.isEmpty()) {
+            toast(resources.getQuantityString(R.plurals.added_tracks, 0, 0))
+            return
+        }
+        toast(getString(R.string.adding_tracks))
+        io.execute {
+            val added = library.addAll(readable)
+            main.post {
+                if (isDestroyed) return@post
+                toast(resources.getQuantityString(R.plurals.added_tracks, added, added))
+                showLocalFiles()
+            }
+        }
     }
 
     private fun showLocalGroups(byAlbum: Boolean) {

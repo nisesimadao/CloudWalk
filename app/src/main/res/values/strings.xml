@@ -35,4 +35,6 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="share_track">Share</string>
     <string name="searching">Searching…</string>
     <string name="no_results">No results</string>
+    <string name="on_device">On device</string>
+    <string name="adding_tracks">Adding tracks…</string>
 </resources>

@@ -35,4 +35,6 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="share_track">共有</string>
     <string name="searching">検索中…</string>
     <string name="no_results">結果がありません</string>
+    <string name="on_device">端末内</string>
+    <string name="adding_tracks">曲を追加中…</string>
 </resources>
