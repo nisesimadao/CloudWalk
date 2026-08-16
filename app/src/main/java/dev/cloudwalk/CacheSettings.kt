@@ -4,11 +4,15 @@ import android.content.Context
 
 class CacheSettings(context: Context) {
     private val prefs = context.getSharedPreferences("cloudwalk_cache", Context.MODE_PRIVATE)
+    @Volatile private var cachedMaxBytes =
+        prefs.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES).coerceAtLeast(MIN_MAX_BYTES)
 
     var maxBytes: Long
-        get() = prefs.getLong(KEY_MAX_BYTES, DEFAULT_MAX_BYTES).coerceAtLeast(MIN_MAX_BYTES)
+        get() = cachedMaxBytes
         set(value) {
-            prefs.edit().putLong(KEY_MAX_BYTES, value.coerceAtLeast(MIN_MAX_BYTES)).apply()
+            val safe = value.coerceAtLeast(MIN_MAX_BYTES)
+            cachedMaxBytes = safe
+            prefs.edit().putLong(KEY_MAX_BYTES, safe).apply()
         }
 
     companion object {
