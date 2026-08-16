@@ -13,9 +13,10 @@ import java.net.URL
 import java.util.concurrent.Executors
 
 class ArtworkCache(context: Context) {
+    private val compactDevice = context.resources.configuration.screenWidthDp <= 400
     private val main = Handler(Looper.getMainLooper())
-    private val io = Executors.newFixedThreadPool(2)
-    private val memory = object : LruCache<String, Bitmap>(6 * 1024 * 1024) {
+    private val io = Executors.newFixedThreadPool(if (compactDevice) 1 else 2)
+    private val memory = object : LruCache<String, Bitmap>((if (compactDevice) 4 else 6) * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     }
     private val dir = File(context.cacheDir, "artwork").apply { mkdirs() }

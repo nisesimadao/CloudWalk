@@ -137,6 +137,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
 
 
+    private fun isOnline(): Boolean {
+        val manager = getSystemService(CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+            capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    }
+
     private fun isSoundCloudUrl(text: String): Boolean =
         text.startsWith("https://soundcloud.com/", ignoreCase = true) ||
             text.startsWith("http://soundcloud.com/", ignoreCase = true) ||
@@ -149,6 +157,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         incoming.removeExtra(Intent.EXTRA_TEXT)
         val url = Regex("""https?://(?:(?:www\.)?soundcloud\.com|on\.soundcloud\.com)/[^\s]+""", RegexOption.IGNORE_CASE)
             .find(text)?.value?.trimEnd('.', ',', ')', ']', '}') ?: return
+        if (!isOnline()) { toast(getString(R.string.offline)); return }
         io.execute {
             val result = runCatching { webApi.resolveTrackUrl(url) }
             main.post {
@@ -910,6 +919,11 @@ class MainActivity : Activity(), PlaybackController.Listener {
         var searchSerial = 0
         fun performSearch(q: String) {
             val serial = ++searchSerial
+            if (!isOnline()) {
+                showResults(emptyList())
+                toast(getString(R.string.offline))
+                return
+            }
             io.execute {
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
@@ -1233,6 +1247,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     getString(R.string.keep_for_session) -> playback.keepForSession(track) { _, message -> toast(message) }
                     getString(R.string.remove_session_cache) -> { sessionCache.remove(track); toast(getString(R.string.removed_session_cache)) }
                     getString(R.string.artist_tracks) -> {
+                        if (!isOnline()) { toast(getString(R.string.offline)); return@setItems }
                         toast(getString(R.string.loading))
                         io.execute {
                             val result = runCatching { webApi.artistTracks(track, 30) }
@@ -1243,6 +1258,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         }
                     }
                     getString(R.string.related_tracks) -> {
+                        if (!isOnline()) { toast(getString(R.string.offline)); return@setItems }
                         toast(getString(R.string.loading))
                         io.execute {
                             val result = runCatching { webApi.relatedTracks(track, 30) }

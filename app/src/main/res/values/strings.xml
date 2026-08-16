@@ -31,4 +31,5 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="sleep_end_track">End of track</string>
     <string name="sleep_set">Sleep timer: %1$s</string>
     <string name="sleep_cancelled">Sleep timer off</string>
+    <string name="offline">No internet connection</string>
 </resources>

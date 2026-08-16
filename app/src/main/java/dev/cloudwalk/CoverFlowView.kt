@@ -47,15 +47,29 @@ class CoverFlowView @JvmOverloads constructor(
     private val sideScale = 0.77f
     private val maxAngle = 58f
     private val artworkTargetPx = min(320, (168f * density).toInt())
+    private val previewArtworkTargetPx = min(96, artworkTargetPx)
     private var scrollOffset = 0f
     private var wasDragging = false
     private var lastPrefetchCenter = -99
+    private var lastPrefetchHighQuality = false
+    private val promoteArtworkRunnable = object : Runnable {
+        override fun run() {
+            if (!scroller.isFinished) {
+                postDelayed(this, 120L)
+                return
+            }
+            wasDragging = false
+            lastPrefetchHighQuality = false
+            prefetchVisible(highQuality = true)
+        }
+    }
     var lowPowerMode: Boolean = false
         set(value) {
             if (field == value) return
             field = value
             lastPrefetchCenter = -99
-            prefetchVisible()
+            lastPrefetchHighQuality = false
+            prefetchVisible(highQuality = true)
             invalidate()
         }
 
@@ -76,6 +90,7 @@ class CoverFlowView @JvmOverloads constructor(
 
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDown(e: MotionEvent): Boolean {
+            removeCallbacks(promoteArtworkRunnable)
             wasDragging = false
             if (!scroller.isFinished) scroller.abortAnimation()
             return true
@@ -118,6 +133,8 @@ class CoverFlowView @JvmOverloads constructor(
         detector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             if (scroller.isFinished) snapToNearest()
+            removeCallbacks(promoteArtworkRunnable)
+            postDelayed(promoteArtworkRunnable, 220L)
             performClick()
         }
         return true
@@ -233,18 +250,20 @@ class CoverFlowView @JvmOverloads constructor(
         path.close()
     }
 
-    private fun prefetchVisible() {
+    private fun prefetchVisible(highQuality: Boolean = !wasDragging && scroller.isFinished) {
         if (tracks.isEmpty()) return
         val cache = artworkCache ?: return
         val center = selectedIndex.coerceIn(0, tracks.lastIndex)
-        if (center == lastPrefetchCenter) return
+        if (center == lastPrefetchCenter && (!highQuality || lastPrefetchHighQuality)) return
         lastPrefetchCenter = center
+        if (highQuality) lastPrefetchHighQuality = true else lastPrefetchHighQuality = false
         val radius = visibleRadius()
         val start = max(0, center - radius)
         val end = min(tracks.lastIndex, center + radius)
         for (i in start..end) {
             val url = tracks[i].artworkUrl ?: continue
-            cache.prefetch(url, artworkTargetPx) { postInvalidateOnAnimation() }
+            val target = if (highQuality && i == center) artworkTargetPx else previewArtworkTargetPx
+            cache.prefetch(url, target) { postInvalidateOnAnimation() }
         }
     }
 
@@ -281,7 +300,7 @@ class CoverFlowView @JvmOverloads constructor(
         if (next != selectedIndex) {
             selectedIndex = next
             if (wasDragging) performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-            prefetchVisible()
+            prefetchVisible(highQuality = false)
             onSelectionChanged?.invoke(next, tracks[next])
         }
     }
@@ -298,10 +317,14 @@ class CoverFlowView @JvmOverloads constructor(
         if (tracks.isEmpty()) return
         val safe = index.coerceIn(0, tracks.lastIndex)
         selectedIndex = safe
-        prefetchVisible()
+        lastPrefetchHighQuality = false
+        prefetchVisible(highQuality = !animate)
         val target = safe * spacing
         if (animate) {
+            wasDragging = true
             scroller.startScroll(scrollOffset.toInt(), 0, (target - scrollOffset).toInt(), 0, 180)
+            removeCallbacks(promoteArtworkRunnable)
+            postDelayed(promoteArtworkRunnable, 220L)
             postInvalidateOnAnimation()
         } else {
             scrollOffset = target
