@@ -933,6 +933,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         var searchInFlight = false
         var queuedSearch: String? = null
         fun performSearch(q: String) {
+            if (overlay !== screen) return
             val serial = ++searchSerial
             if (searchInFlight) {
                 queuedSearch = q
@@ -982,7 +983,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     queuedSearch = null
                     showResults(if (q.isEmpty()) homeTracks else emptyList())
                 } else {
-                    pendingSearch = Runnable { performSearch(q) }.also { main.postDelayed(it, 500L) }
+                    pendingSearch = Runnable {
+                        if (overlay === screen) performSearch(q)
+                    }.also { main.postDelayed(it, 500L) }
                 }
                 return true
             }
