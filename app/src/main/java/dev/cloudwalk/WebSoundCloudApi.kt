@@ -10,86 +10,69 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
-/**
- * Compatibility client for SoundCloud's public web endpoints.
- * Public/unauthed tracks only. No cookies, private resources, or login bypasses.
- */
+/** Public/unauthed SoundCloud web compatibility client. */
 class WebSoundCloudApi(context: Context) {
     private val prefs = context.getSharedPreferences("cloudwalk_web", Context.MODE_PRIVATE)
     private val base = "https://api-v2.soundcloud.com"
-    // Public identifier currently shipped by SoundCloud's web client. It is not a secret.
-    // Used as a fast seed; if SoundCloud rotates it, discovery refreshes the value.
     private val seedClientId = "UMY1dzQ68n2QbCuypNe8JOivmV2FO2Ep"
 
     fun searchTracks(query: String, limit: Int = 30): List<Track> {
-        var clientId = clientId()
         val q = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
-        fun request(id: String) = get("$base/search/tracks?q=$q&client_id=$id&limit=$limit&offset=0&linked_partitioning=1&app_locale=en")
-        val body = try { request(clientId) } catch (first: Throwable) {
-            clientId = discoverClientId()
-            request(clientId)
+        val body = withClientId { id ->
+            get("$base/search/tracks?q=$q&client_id=$id&limit=$limit&offset=0&linked_partitioning=1&app_locale=en")
         }
-        val root = JSONObject(body)
-        val arr = root.optJSONArray("collection") ?: return emptyList()
-        Log.d("CloudWalkWeb", "search collection=${arr.length()}")
-        val out = ArrayList<Track>(arr.length())
-        for (i in 0 until arr.length()) {
-            val item = arr.optJSONObject(i) ?: continue
-            val media = item.optJSONObject("media")
-            val transcodings = media?.optJSONArray("transcodings")
-            var preferred: String? = null
-            var fallback: String? = null
-            if (transcodings != null) {
-                for (j in 0 until transcodings.length()) {
-                    val t = transcodings.optJSONObject(j) ?: continue
-                    val format = t.optJSONObject("format")
-                    val protocol = format?.optString("protocol")
-                    val endpoint = t.optString("url").ifBlank { null }
-                    if (protocol == "progressive" && endpoint != null) preferred = endpoint
-                    if (fallback == null && endpoint != null) fallback = endpoint
-                }
-            }
-            val user = item.optJSONObject("user")
-            out += Track(
-                id = item.optString("urn").ifBlank { "soundcloud:tracks:${item.optLong("id")}" },
-                title = item.optString("title", "Untitled"),
-                artist = user?.optString("username")?.ifBlank { null } ?: "SoundCloud",
-                artworkUrl = item.optString("artwork_url").ifBlank { null },
-                durationMs = item.optLong("duration", 0L),
-                permalinkUrl = item.optString("permalink_url").ifBlank { null },
-                streamUrl = preferred ?: fallback
-            )
+        val arr = JSONObject(body).optJSONArray("collection") ?: return emptyList()
+        Log.d(TAG, "search collection=${arr.length()}")
+        return buildList(arr.length()) {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(::parseTrack)?.let(::add)
         }
-        return out
     }
 
     fun resolvePublicStream(transcodingEndpoint: String): String {
         val separator = if ('?' in transcodingEndpoint) '&' else '?'
-        var id = clientId()
-        val body = try { get("$transcodingEndpoint${separator}client_id=$id") } catch (first: Throwable) {
-            id = discoverClientId()
-            get("$transcodingEndpoint${separator}client_id=$id")
-        }
+        val body = withClientId { id -> get("$transcodingEndpoint${separator}client_id=$id") }
         return JSONObject(body).getString("url")
     }
 
-    fun resolveTrackUrl(soundCloudUrl: String): Track? {
-        val cid = clientId()
+    fun resolveTrackUrl(inputUrl: String): Track? {
+        val soundCloudUrl = if (isShortUrl(inputUrl)) resolveRedirect(inputUrl) else inputUrl
         val encoded = URLEncoder.encode(soundCloudUrl, StandardCharsets.UTF_8.name())
-        val item = JSONObject(get("$base/resolve?url=$encoded&client_id=$cid"))
+        val body = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
+        val item = JSONObject(body)
         if (item.optString("kind") != "track") return null
-        val media = item.optJSONObject("media")
-        val transcodings = media?.optJSONArray("transcodings")
-        var endpoint: String? = null
+        return parseTrack(item)?.let { track ->
+            if (track.permalinkUrl.isNullOrBlank()) track.copy(permalinkUrl = soundCloudUrl) else track
+        }
+    }
+
+    fun relatedTracks(track: Track, limit: Int = 30): List<Track> {
+        val numericId = track.id.substringAfterLast(':').toLongOrNull() ?: return emptyList()
+        val body = withClientId { id ->
+            get("$base/tracks/$numericId/related?client_id=$id&limit=$limit&offset=0&linked_partitioning=1")
+        }
+        val root = JSONObject(body)
+        val arr = root.optJSONArray("collection") ?: return emptyList()
+        return buildList(arr.length()) {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(::parseTrack)?.let(::add)
+        }
+    }
+
+    private fun parseTrack(item: JSONObject): Track? {
+        if (item.optString("kind").let { it.isNotBlank() && it != "track" }) return null
+        val transcodings = item.optJSONObject("media")?.optJSONArray("transcodings")
+        var progressive: String? = null
+        var hls: String? = null
         if (transcodings != null) {
             for (i in 0 until transcodings.length()) {
                 val t = transcodings.optJSONObject(i) ?: continue
-                val protocol = t.optJSONObject("format")?.optString("protocol")
-                val u = t.optString("url").ifBlank { null }
-                if (protocol == "progressive" && u != null) { endpoint = u; break }
-                if (endpoint == null) endpoint = u
+                val endpoint = t.optString("url").ifBlank { null } ?: continue
+                when (t.optJSONObject("format")?.optString("protocol")) {
+                    "progressive" -> if (progressive == null) progressive = endpoint
+                    "hls" -> if (hls == null) hls = endpoint
+                }
             }
         }
+        val stream = progressive ?: hls ?: return null
         val user = item.optJSONObject("user")
         return Track(
             id = item.optString("urn").ifBlank { "soundcloud:tracks:${item.optLong("id")}" },
@@ -97,33 +80,63 @@ class WebSoundCloudApi(context: Context) {
             artist = user?.optString("username")?.ifBlank { null } ?: "SoundCloud",
             artworkUrl = item.optString("artwork_url").ifBlank { null },
             durationMs = item.optLong("duration", 0L),
-            permalinkUrl = item.optString("permalink_url").ifBlank { soundCloudUrl },
-            streamUrl = endpoint
+            permalinkUrl = item.optString("permalink_url").ifBlank { null },
+            streamUrl = stream
         )
+    }
+
+    private fun withClientId(block: (String) -> String): String {
+        val id = clientId()
+        return try {
+            block(id)
+        } catch (error: HttpStatusException) {
+            if (error.code != 401 && error.code != 403) throw error
+            val refreshed = discoverClientId()
+            block(refreshed)
+        }
     }
 
     private fun clientId(): String {
         val cached = prefs.getString("client_id", null)
         val fetchedAt = prefs.getLong("client_id_fetched_at", 0L)
-        if (!cached.isNullOrBlank() && System.currentTimeMillis() - fetchedAt < 3L * 24 * 60 * 60 * 1000) return cached
+        if (!cached.isNullOrBlank() && System.currentTimeMillis() - fetchedAt < CLIENT_ID_TTL_MS) return cached
         return seedClientId
     }
 
     private fun discoverClientId(): String {
         val html = get("https://soundcloud.com")
-        val scripts = Regex("""<script[^>]+src="([^"]+)"""").findAll(html)
+        val scripts = Regex("""<script[^>]+src=["']([^"']+)["']""").findAll(html)
             .map { it.groupValues[1] }
             .filter { it.contains("a-v2.sndcdn.com/assets/") }
-            .toList()
-            .asReversed()
-        for (script in scripts.take(16)) {
+            .toList().asReversed()
+        val patterns = listOf(
+            Regex("""client_id\s*[:=]\s*["']([A-Za-z0-9]{20,64})["']"""),
+            Regex("""["']client_id["']\s*:\s*["']([A-Za-z0-9]{20,64})["']""")
+        )
+        for (script in scripts.take(12)) {
             val js = runCatching { get(script) }.getOrNull() ?: continue
-            val match = Regex("""client_id:["]([A-Za-z0-9]{20,64})["]""").find(js) ?: continue
+            val match = patterns.firstNotNullOfOrNull { it.find(js) } ?: continue
             val id = match.groupValues[1]
             prefs.edit().putString("client_id", id).putLong("client_id_fetched_at", System.currentTimeMillis()).apply()
             return id
         }
         throw IllegalStateException("Could not discover SoundCloud web client id")
+    }
+
+    private fun isShortUrl(url: String): Boolean = runCatching { URL(url).host.equals("on.soundcloud.com", true) }.getOrDefault(false)
+
+    private fun resolveRedirect(url: String): String {
+        val c = URL(url).openConnection() as HttpURLConnection
+        return try {
+            c.requestMethod = "GET"
+            c.connectTimeout = 6_000
+            c.readTimeout = 8_000
+            c.instanceFollowRedirects = true
+            c.setRequestProperty("User-Agent", USER_AGENT)
+            c.connect()
+            c.inputStream.close()
+            c.url.toString()
+        } finally { c.disconnect() }
     }
 
     private fun get(url: String): String {
@@ -134,15 +147,21 @@ class WebSoundCloudApi(context: Context) {
             c.readTimeout = 12_000
             c.instanceFollowRedirects = true
             c.setRequestProperty("Accept", "application/json,text/html,*/*")
-            c.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 9; CloudWalk) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36")
+            c.setRequestProperty("User-Agent", USER_AGENT)
             val code = c.responseCode
-            Log.d("CloudWalkWeb", "HTTP $code ${URL(url).host}${URL(url).path}")
+            Log.d(TAG, "HTTP $code ${URL(url).host}${URL(url).path}")
             val stream = if (code in 200..299) c.inputStream else c.errorStream
             val text = stream?.let { BufferedReader(InputStreamReader(it, StandardCharsets.UTF_8)).use(BufferedReader::readText) }.orEmpty()
-            if (code !in 200..299) throw IllegalStateException("HTTP $code")
+            if (code !in 200..299) throw HttpStatusException(code)
             return text
-        } finally {
-            c.disconnect()
-        }
+        } finally { c.disconnect() }
+    }
+
+    private class HttpStatusException(val code: Int) : IllegalStateException("HTTP $code")
+
+    companion object {
+        private const val TAG = "CloudWalkWeb"
+        private const val CLIENT_ID_TTL_MS = 3L * 24 * 60 * 60 * 1000
+        private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 9; CloudWalk) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36"
     }
 }

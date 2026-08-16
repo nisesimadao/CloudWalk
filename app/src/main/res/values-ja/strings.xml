@@ -19,4 +19,7 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="queue_title">CloudWalk キュー</string><string name="queue_title_shuffled">CloudWalk キュー · シャッフル</string><string name="session_expired">セッションの期限が切れました。SoundCloudに再接続してください。</string><string name="couldnt_load_section">%1$sを読み込めませんでした</string><string name="track_count">%1$d曲</string><string name="position_of">%1$d / %2$d</string><string name="shuffle_on_desc">シャッフルON</string><string name="shuffle_off_desc">シャッフルOFF</string><string name="soundcloud">SoundCloud</string><string name="playback_channel">再生</string><string name="playback_channel_desc">CloudWalkの再生コントロール</string><string name="music_playback">音楽を再生中</string><string name="pause">一時停止</string><string name="playback_failed">再生に失敗しました</string><string name="stream_not_cacheable">このストリームはセッションキャッシュできません</string><string name="couldnt_cache_track">曲をキャッシュできませんでした</string><string name="no_playable_stream">再生可能なストリームがありません</string><string name="media_player_error">MediaPlayerエラー %1$d/%2$d</string>
     <string name="session_cache_full">セッションキャッシュがいっぱいです</string>
     <string name="local_track">端末内の曲</string>
+    <string name="related_tracks">関連する曲</string>
+    <string name="home_empty">SoundCloudを検索して曲を見つけよう</string>
+    <string name="search_failed">SoundCloudを検索できませんでした</string>
 </resources>

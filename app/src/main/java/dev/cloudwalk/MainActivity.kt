@@ -26,8 +26,7 @@ import java.util.ArrayDeque
 
 class MainActivity : Activity(), PlaybackController.Listener {
 
-    private val demoRepository: TrackRepository = DemoTrackRepository()
-    private val homeTracks = ArrayList<Track>().apply { addAll(demoRepository.featured()) }
+    private val homeTracks = ArrayList<Track>()
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
 
@@ -46,6 +45,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var flowView: CoverFlowView
     private lateinit var listView: ListView
     private lateinit var contentHost: FrameLayout
+    private lateinit var homeEmptyView: TextView
     private lateinit var titleView: TextView
     private lateinit var artistView: TextView
     private lateinit var miniTitleView: TextView
@@ -53,6 +53,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var miniArtwork: ImageView
     private lateinit var playButton: ImageButton
     private lateinit var progress: SeekBar
+    private lateinit var trackInfoPanel: View
+    private lateinit var playerStripView: View
 
     private var selectedTrack: Track? = null
     private var playing = false
@@ -136,13 +138,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun isSoundCloudUrl(text: String): Boolean =
         text.startsWith("https://soundcloud.com/", ignoreCase = true) ||
             text.startsWith("http://soundcloud.com/", ignoreCase = true) ||
-            text.startsWith("https://www.soundcloud.com/", ignoreCase = true)
+            text.startsWith("https://www.soundcloud.com/", ignoreCase = true) ||
+            text.startsWith("https://on.soundcloud.com/", ignoreCase = true)
 
     private fun handleSharedText(incoming: Intent?) {
         if (incoming?.action != Intent.ACTION_SEND || incoming.type != "text/plain") return
         val text = incoming.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
         incoming.removeExtra(Intent.EXTRA_TEXT)
-        val url = Regex("https?://(?:www\\.)?soundcloud\\.com/[^\\s]+", RegexOption.IGNORE_CASE)
+        val url = Regex("""https?://(?:(?:www\.)?soundcloud\.com|on\.soundcloud\.com)/[^\s]+""", RegexOption.IGNORE_CASE)
             .find(text)?.value?.trimEnd('.', ',', ')', ']', '}') ?: return
         io.execute {
             val result = runCatching { webApi.resolveTrackUrl(url) }
@@ -301,6 +304,19 @@ class MainActivity : Activity(), PlaybackController.Listener {
             visibility = View.GONE
         }
         contentHost.addView(listView, FrameLayout.LayoutParams(-1, -1))
+        homeEmptyView = TextView(this).apply {
+            text = getString(R.string.home_empty)
+            textSize = 14f
+            setTextColor(Color.rgb(150, 150, 150))
+            gravity = Gravity.CENTER
+            setPadding(dp(36), 0, dp(36), 0)
+            background = selectableBackground()
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showSearch() }
+            visibility = if (homeTracks.isEmpty()) View.VISIBLE else View.GONE
+        }
+        contentHost.addView(homeEmptyView, FrameLayout.LayoutParams(-1, -1))
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -311,9 +327,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
         artistView = textLine(13f, Color.rgb(170, 170, 170), false, Gravity.CENTER)
         info.addView(titleView, LinearLayout.LayoutParams(-1, dp(30)))
         info.addView(artistView, LinearLayout.LayoutParams(-1, dp(24)))
+        trackInfoPanel = info
+        trackInfoPanel.visibility = if (homeTracks.isEmpty()) View.GONE else View.VISIBLE
         root.addView(info, LinearLayout.LayoutParams(-1, dp(60)))
 
-        root.addView(buildPlayerStrip(), LinearLayout.LayoutParams(-1, dp(76)))
+        playerStripView = buildPlayerStrip().apply { visibility = if (homeTracks.isEmpty()) View.GONE else View.VISIBLE }
+        root.addView(playerStripView, LinearLayout.LayoutParams(-1, dp(76)))
         root.addView(buildBottomNav(), LinearLayout.LayoutParams(-1, dp(64)))
         return root
     }
@@ -900,8 +919,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     }
                 }
                 attempt.exceptionOrNull()?.let { Log.e("CloudWalkSearch", "Search failed", it) }
-                val found = attempt.getOrElse { if (isSoundCloudUrl(q)) emptyList() else demoRepository.search(q) }
-                main.post { if (overlay === screen && serial == searchSerial) showResults(found) }
+                main.post {
+                    if (overlay !== screen || serial != searchSerial) return@post
+                    attempt.onSuccess(::showResults).onFailure {
+                        showResults(emptyList())
+                        toast(getString(R.string.search_failed))
+                    }
+                }
             }
         }
         search.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
@@ -910,7 +934,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 val q = newText.orEmpty().trim()
                 if (q.length < 2) {
                     searchSerial++
-                    showResults(if (q.isEmpty()) homeTracks else demoRepository.search(q))
+                    showResults(if (q.isEmpty()) homeTracks else emptyList())
                 } else {
                     pendingSearch = Runnable { performSearch(q) }.also { main.postDelayed(it, 500L) }
                 }
@@ -1077,6 +1101,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
         flowView.tracks = homeTracks
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
         flowView.setSelected(selectedIndex.coerceIn(0, homeTracks.lastIndex), false)
+        homeEmptyView.visibility = View.GONE
+        trackInfoPanel.visibility = View.VISIBLE
+        playerStripView.visibility = View.VISIBLE
+        setViewMode(showingFlow)
         rebuildShuffleOrder(selectedTrack?.id)
         updateMediaSessionQueue()
     }
@@ -1169,6 +1197,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (selectedTrack != null && selectedTrack?.id != track.id) actions.add(getString(R.string.play_next))
         actions.add(if (collections.isLiked(track)) getString(R.string.remove_from_likes) else getString(R.string.add_to_likes))
         if (playback.canSessionCache(track)) actions.add(if (playback.isSessionCached(track)) getString(R.string.remove_session_cache) else getString(R.string.keep_for_session))
+        if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.related_tracks))
         if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.open_soundcloud))
         if (allowRemoveFromQueue && selectedTrack?.id != track.id) actions.add(getString(R.string.remove_from_queue))
         AlertDialog.Builder(this)
@@ -1196,6 +1225,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     getString(R.string.add_to_likes), getString(R.string.remove_from_likes) -> { collections.toggleLike(track); toast(if (collections.isLiked(track)) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes)) }
                     getString(R.string.keep_for_session) -> playback.keepForSession(track) { _, message -> toast(message) }
                     getString(R.string.remove_session_cache) -> { sessionCache.remove(track); toast(getString(R.string.removed_session_cache)) }
+                    getString(R.string.related_tracks) -> {
+                        toast(getString(R.string.loading))
+                        io.execute {
+                            val result = runCatching { webApi.relatedTracks(track, 30) }
+                            main.post {
+                                result.onSuccess { items -> showStoredTrackScreen(getString(R.string.related_tracks), items, getString(R.string.nothing_here)) }
+                                    .onFailure { toast(getString(R.string.couldnt_load_section, getString(R.string.related_tracks))) }
+                            }
+                        }
+                    }
                     getString(R.string.open_soundcloud) -> track.permalinkUrl?.let { runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(it))) } }
                     getString(R.string.remove_from_queue) -> {
                         homeTracks.removeAll { it.id == track.id }
@@ -1203,6 +1242,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         flowView.tracks = homeTracks
                         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                         updateMediaSessionQueue()
+                        setViewMode(showingFlow)
                         toast(getString(R.string.removed_from_queue))
                         closeOverlay()
                         showQueue()
@@ -1435,6 +1475,15 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun setViewMode(flow: Boolean) {
         showingFlow = flow && !lowPowerMode
+        if (homeTracks.isEmpty()) {
+            flowView.visibility = View.GONE
+            listView.visibility = View.GONE
+            homeEmptyView.visibility = View.VISIBLE
+            trackInfoPanel.visibility = View.GONE
+            playerStripView.visibility = View.GONE
+            return
+        }
+        homeEmptyView.visibility = View.GONE
         flowView.visibility = if (showingFlow) View.VISIBLE else View.GONE
         listView.visibility = if (showingFlow) View.GONE else View.VISIBLE
     }
@@ -1448,6 +1497,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun showTrack(track: Track) {
         val changed = selectedTrack?.id != track.id
         selectedTrack = track
+        if (::trackInfoPanel.isInitialized) trackInfoPanel.visibility = View.VISIBLE
+        if (::playerStripView.isInitialized) playerStripView.visibility = View.VISIBLE
         titleView.text = track.title
         artistView.text = track.artist
         miniTitleView.text = track.title

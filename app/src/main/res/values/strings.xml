@@ -19,4 +19,7 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="queue_title">CloudWalk Queue</string><string name="queue_title_shuffled">CloudWalk Queue · Shuffled</string><string name="session_expired">Session expired. Reconnect SoundCloud.</string><string name="couldnt_load_section">Couldn’t load %1$s</string><string name="track_count">%1$d tracks</string><string name="position_of">%1$d of %2$d</string><string name="shuffle_on_desc">Shuffle on</string><string name="shuffle_off_desc">Shuffle off</string><string name="soundcloud">SoundCloud</string><string name="playback_channel">Playback</string><string name="playback_channel_desc">CloudWalk playback controls</string><string name="music_playback">Music playback</string><string name="pause">Pause</string><string name="playback_failed">Playback failed</string><string name="stream_not_cacheable">This stream can’t be cached for this session</string><string name="couldnt_cache_track">Couldn’t cache track</string><string name="no_playable_stream">No playable stream returned</string><string name="media_player_error">MediaPlayer error %1$d/%2$d</string>
     <string name="session_cache_full">Session cache is full</string>
     <string name="local_track">Local track</string>
+    <string name="related_tracks">Related tracks</string>
+    <string name="home_empty">Search SoundCloud to get started</string>
+    <string name="search_failed">Couldn’t search SoundCloud</string>
 </resources>
