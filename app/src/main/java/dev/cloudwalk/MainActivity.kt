@@ -1197,6 +1197,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (selectedTrack != null && selectedTrack?.id != track.id) actions.add(getString(R.string.play_next))
         actions.add(if (collections.isLiked(track)) getString(R.string.remove_from_likes) else getString(R.string.add_to_likes))
         if (playback.canSessionCache(track)) actions.add(if (playback.isSessionCached(track)) getString(R.string.remove_session_cache) else getString(R.string.keep_for_session))
+        if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.artist_tracks))
         if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.related_tracks))
         if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.open_soundcloud))
         if (allowRemoveFromQueue && selectedTrack?.id != track.id) actions.add(getString(R.string.remove_from_queue))
@@ -1225,6 +1226,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     getString(R.string.add_to_likes), getString(R.string.remove_from_likes) -> { collections.toggleLike(track); toast(if (collections.isLiked(track)) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes)) }
                     getString(R.string.keep_for_session) -> playback.keepForSession(track) { _, message -> toast(message) }
                     getString(R.string.remove_session_cache) -> { sessionCache.remove(track); toast(getString(R.string.removed_session_cache)) }
+                    getString(R.string.artist_tracks) -> {
+                        toast(getString(R.string.loading))
+                        io.execute {
+                            val result = runCatching { webApi.artistTracks(track, 30) }
+                            main.post {
+                                result.onSuccess { items -> showStoredTrackScreen(getString(R.string.artist_tracks), items, getString(R.string.nothing_here)) }
+                                    .onFailure { toast(getString(R.string.couldnt_load_section, getString(R.string.artist_tracks))) }
+                            }
+                        }
+                    }
                     getString(R.string.related_tracks) -> {
                         toast(getString(R.string.loading))
                         io.execute {

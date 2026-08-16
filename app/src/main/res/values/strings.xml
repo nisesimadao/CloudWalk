@@ -22,4 +22,5 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="related_tracks">Related tracks</string>
     <string name="home_empty">Search SoundCloud to get started</string>
     <string name="search_failed">Couldn’t search SoundCloud</string>
+    <string name="artist_tracks">More from this artist</string>
 </resources>

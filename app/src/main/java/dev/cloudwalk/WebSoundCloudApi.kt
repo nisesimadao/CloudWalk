@@ -45,6 +45,25 @@ class WebSoundCloudApi(context: Context) {
         }
     }
 
+    fun artistTracks(track: Track, limit: Int = 30): List<Track> {
+        val permalink = track.permalinkUrl ?: return emptyList()
+        val uri = runCatching { java.net.URI(permalink) }.getOrNull() ?: return emptyList()
+        val artistSlug = uri.path.trim('/').substringBefore('/').takeIf { it.isNotBlank() } ?: return emptyList()
+        val artistUrl = "https://soundcloud.com/$artistSlug"
+        val encoded = URLEncoder.encode(artistUrl, StandardCharsets.UTF_8.name())
+        val userBody = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
+        val user = JSONObject(userBody)
+        if (user.optString("kind") != "user") return emptyList()
+        val userId = user.optLong("id", 0L).takeIf { it > 0 } ?: return emptyList()
+        val body = withClientId { id ->
+            get("$base/users/$userId/tracks?client_id=$id&limit=$limit&offset=0&linked_partitioning=1")
+        }
+        val arr = JSONObject(body).optJSONArray("collection") ?: return emptyList()
+        return buildList(arr.length()) {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(::parseTrack)?.let(::add)
+        }
+    }
+
     fun relatedTracks(track: Track, limit: Int = 30): List<Track> {
         val numericId = track.id.substringAfterLast(':').toLongOrNull() ?: return emptyList()
         val body = withClientId { id ->

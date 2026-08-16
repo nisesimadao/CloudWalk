@@ -22,4 +22,5 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="related_tracks">関連する曲</string>
     <string name="home_empty">SoundCloudを検索して曲を見つけよう</string>
     <string name="search_failed">SoundCloudを検索できませんでした</string>
+    <string name="artist_tracks">このアーティストの曲</string>
 </resources>
