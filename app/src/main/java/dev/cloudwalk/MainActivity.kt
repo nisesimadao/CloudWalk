@@ -917,13 +917,20 @@ class MainActivity : Activity(), PlaybackController.Listener {
         showResults(homeTracks)
         var pendingSearch: Runnable? = null
         var searchSerial = 0
+        var searchInFlight = false
+        var queuedSearch: String? = null
         fun performSearch(q: String) {
             val serial = ++searchSerial
+            if (searchInFlight) {
+                queuedSearch = q
+                return
+            }
             if (!isOnline()) {
                 showResults(emptyList())
                 toast(getString(R.string.offline))
                 return
             }
+            searchInFlight = true
             io.execute {
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
@@ -936,11 +943,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 }
                 attempt.exceptionOrNull()?.let { Log.e("CloudWalkSearch", "Search failed", it) }
                 main.post {
-                    if (overlay !== screen || serial != searchSerial) return@post
-                    attempt.onSuccess(::showResults).onFailure {
-                        showResults(emptyList())
-                        toast(getString(R.string.search_failed))
+                    searchInFlight = false
+                    if (overlay === screen && serial == searchSerial) {
+                        attempt.onSuccess(::showResults).onFailure {
+                            showResults(emptyList())
+                            toast(getString(R.string.search_failed))
+                        }
                     }
+                    val next = queuedSearch
+                    queuedSearch = null
+                    if (overlay === screen && !next.isNullOrBlank()) performSearch(next)
                 }
             }
         }
@@ -950,6 +962,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 val q = newText.orEmpty().trim()
                 if (q.length < 2) {
                     searchSerial++
+                    queuedSearch = null
                     showResults(if (q.isEmpty()) homeTracks else emptyList())
                 } else {
                     pendingSearch = Runnable { performSearch(q) }.also { main.postDelayed(it, 500L) }
