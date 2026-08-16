@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Lightweight playback wrapper using only platform Android media APIs. */
 class PlaybackController(
@@ -34,6 +35,7 @@ class PlaybackController(
     private var currentTrack: Track? = null
     private var resumeAfterFocusGain = false
     private var released = false
+    private val playGeneration = AtomicInteger()
 
     var listener: Listener? = null
 
@@ -99,27 +101,43 @@ class PlaybackController(
             return
         }
 
+        val generation = playGeneration.incrementAndGet()
         releasePlayer()
         currentTrack = track
         listener?.onBuffering(track)
 
         io.execute {
+            if (!isCurrentRequest(generation, track)) return@execute
             try {
                 if (!track.localUri.isNullOrBlank()) {
-                    main.post { prepareLocal(track, Uri.parse(track.localUri)) }
+                    main.post {
+                        if (isCurrentRequest(generation, track)) prepareLocal(track, Uri.parse(track.localUri))
+                    }
                     return@execute
                 }
                 sessionCache.cachedFile(track)?.let { cached ->
-                    main.post { prepare(track, cached.absolutePath) }
+                    main.post {
+                        if (isCurrentRequest(generation, track)) prepare(track, cached.absolutePath)
+                    }
                     return@execute
                 }
                 val stream = resolveStream(track)
-                main.post { prepare(track, stream) }
+                if (!isCurrentRequest(generation, track)) return@execute
+                main.post {
+                    if (isCurrentRequest(generation, track)) prepare(track, stream)
+                }
             } catch (t: Throwable) {
-                main.post { listener?.onError(track, t.message ?: appContext.getString(R.string.playback_failed)) }
+                main.post {
+                    if (isCurrentRequest(generation, track)) {
+                        listener?.onError(track, t.message ?: appContext.getString(R.string.playback_failed))
+                    }
+                }
             }
         }
     }
+
+    private fun isCurrentRequest(generation: Int, track: Track): Boolean =
+        !released && generation == playGeneration.get() && currentTrack?.id == track.id
 
     fun canSessionCache(track: Track): Boolean {
         val endpoint = track.streamUrl ?: return false
@@ -167,21 +185,24 @@ class PlaybackController(
         val mediaPlayer = MediaPlayer().apply {
             setAudioAttributes(audioAttributes)
             dataSource()
-            setOnPreparedListener {
-                listener?.onReady(track, it.duration)
+            setOnPreparedListener { prepared ->
+                if (prepared !== player || currentTrack?.id != track.id || released) return@setOnPreparedListener
+                listener?.onReady(track, prepared.duration)
                 if (requestAudioFocus()) {
-                    it.start()
+                    prepared.start()
                     listener?.onPlayingChanged(track, true)
                 } else {
                     listener?.onPlayingChanged(track, false)
                 }
             }
-            setOnCompletionListener {
+            setOnCompletionListener { completed ->
+                if (completed !== player || currentTrack?.id != track.id || released) return@setOnCompletionListener
                 abandonAudioFocus()
                 listener?.onPlayingChanged(track, false)
                 listener?.onCompleted(track)
             }
-            setOnErrorListener { _, what, extra ->
+            setOnErrorListener { failed, what, extra ->
+                if (failed !== player || currentTrack?.id != track.id || released) return@setOnErrorListener true
                 abandonAudioFocus()
                 listener?.onError(track, appContext.getString(R.string.media_player_error, what, extra))
                 true
@@ -245,6 +266,7 @@ class PlaybackController(
     fun release() {
         if (released) return
         released = true
+        playGeneration.incrementAndGet()
         resumeAfterFocusGain = false
         abandonAudioFocus()
         releasePlayer()
