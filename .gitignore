@@ -1,0 +1,27 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Signing / local secrets
+*.jks
+*.keystore
+*.properties.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.apk
+*.aab
+
+# Local tooling
+.agents/
+.codex/
+.kotlin/
+.env
+.env.*
