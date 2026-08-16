@@ -52,6 +52,7 @@ class CoverFlowView @JvmOverloads constructor(
     private var wasDragging = false
     private var lastPrefetchCenter = -99
     private var lastPrefetchHighQuality = false
+    private var windowActive = false
     private val promoteArtworkRunnable = object : Runnable {
         override fun run() {
             if (!scroller.isFinished) {
@@ -143,6 +144,38 @@ class CoverFlowView @JvmOverloads constructor(
     override fun performClick(): Boolean {
         super.performClick()
         return true
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        windowActive = windowVisibility == View.VISIBLE
+        if (windowActive) {
+            lastPrefetchCenter = -99
+            lastPrefetchHighQuality = false
+            prefetchVisible(highQuality = true)
+        }
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        windowActive = visibility == View.VISIBLE
+        if (!windowActive) {
+            removeCallbacks(promoteArtworkRunnable)
+            if (!scroller.isFinished) scroller.abortAnimation()
+            wasDragging = false
+        } else if (isAttachedToWindow) {
+            lastPrefetchCenter = -99
+            lastPrefetchHighQuality = false
+            prefetchVisible(highQuality = true)
+            invalidate()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        windowActive = false
+        removeCallbacks(promoteArtworkRunnable)
+        if (!scroller.isFinished) scroller.abortAnimation()
+        super.onDetachedFromWindow()
     }
 
     override fun computeScroll() {
@@ -251,7 +284,7 @@ class CoverFlowView @JvmOverloads constructor(
     }
 
     private fun prefetchVisible(highQuality: Boolean = !wasDragging && scroller.isFinished) {
-        if (tracks.isEmpty()) return
+        if (!windowActive || tracks.isEmpty()) return
         val cache = artworkCache ?: return
         val center = selectedIndex.coerceIn(0, tracks.lastIndex)
         if (center == lastPrefetchCenter && (!highQuality || lastPrefetchHighQuality)) return
