@@ -39,6 +39,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var authBroker: AuthBroker
     private lateinit var authSession: AuthSession
     private lateinit var collections: LocalCollections
+    private lateinit var localLibrary: LocalLibrary
     private lateinit var mediaSession: MediaSession
     private val authRedirectUri = "cloudwalk://auth/callback"
 
@@ -100,6 +101,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         )
         webApi = WebSoundCloudApi(this)
         collections = LocalCollections(this)
+        localLibrary = LocalLibrary(this)
         val recentHome = collections.recent()
         if (recentHome.isNotEmpty()) {
             homeTracks.clear()
@@ -562,7 +564,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             divider = ColorDrawable(Color.rgb(38,38,38)); dividerHeight = 1
             selector = selectableBackground(); isVerticalScrollBarEnabled = false
         }
-        val local = LocalLibrary(this).all()
+        val local = localLibrary.all()
         val albumCount = local.map { it.album?.takeIf(String::isNotBlank) ?: getString(R.string.unknown_album) }.distinct().size
         val artistCount = local.map { it.artist.ifBlank { getString(R.string.unknown_artist) } }.distinct().size
         val recentCount = collections.recent().size
@@ -602,7 +604,6 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun buildLocalFilesScreen(): View {
-        val localLibrary = LocalLibrary(this)
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(12,12,12)) }
         val bar = Toolbar(this).apply {
             setBackgroundColor(Color.rgb(12,12,12)); title = getString(R.string.local_files); setTitleTextColor(Color.WHITE)
@@ -663,7 +664,6 @@ class MainActivity : Activity(), PlaybackController.Listener {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_LOCAL_AUDIO || resultCode != RESULT_OK || data == null) return
-        val library = LocalLibrary(this)
         val uris = ArrayList<android.net.Uri>()
         data.clipData?.let { clip ->
             for (i in 0 until clip.itemCount) uris.add(clip.getItemAt(i).uri)
@@ -679,7 +679,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         toast(getString(R.string.adding_tracks))
         io.execute {
-            val added = library.addAll(readable)
+            val added = localLibrary.addAll(readable)
             main.post {
                 if (isDestroyed) return@post
                 toast(resources.getQuantityString(R.plurals.added_tracks, added, added))
@@ -689,7 +689,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showLocalGroups(byAlbum: Boolean) {
-        val tracks = LocalLibrary(this).all()
+        val tracks = localLibrary.all()
         val groups = tracks.groupBy {
             if (byAlbum) (it.album?.takeIf { value -> value.isNotBlank() } ?: getString(R.string.unknown_album))
             else it.artist.ifBlank { getString(R.string.unknown_artist) }

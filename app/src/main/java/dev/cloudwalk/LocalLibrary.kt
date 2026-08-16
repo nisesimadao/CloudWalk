@@ -16,8 +16,18 @@ class LocalLibrary(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("cloudwalk_local", Context.MODE_PRIVATE)
     private val artDir = File(appContext.filesDir, "local_art").apply { mkdirs() }
+    private val lock = Any()
+    @Volatile private var cachedTracks: List<Track>? = null
 
     fun all(): List<Track> {
+        cachedTracks?.let { return it }
+        return synchronized(lock) {
+            cachedTracks?.let { return@synchronized it }
+            readStored().also { cachedTracks = it }
+        }
+    }
+
+    private fun readStored(): List<Track> {
         val raw = prefs.getString("tracks", "[]") ?: "[]"
         val array = runCatching { JSONArray(raw) }.getOrDefault(JSONArray())
         val out = ArrayList<Track>(array.length())
@@ -34,32 +44,36 @@ class LocalLibrary(context: Context) {
                 localUri = uri
             )
         }
-        return out
+        return out.toList()
     }
 
-    /** Parse multiple files and persist the library once. Call from a background thread. */
+    /** Parse multiple files outside the lock, then merge and persist once. */
     fun addAll(uris: List<Uri>): Int {
         if (uris.isEmpty()) return 0
-        val existing = LinkedHashMap<String, Track>()
-        all().forEach { track -> track.localUri?.let { existing[it] = track } }
-        var added = 0
+        val parsed = ArrayList<Track>()
         for (uri in uris.distinct()) {
-            runCatching { readTrack(uri) }.onSuccess { track ->
-                val previous = existing[uri.toString()]
+            runCatching { readTrack(uri) }.getOrNull()?.let(parsed::add)
+        }
+        if (parsed.isEmpty()) return 0
+        synchronized(lock) {
+            val existing = LinkedHashMap<String, Track>()
+            all().forEach { track -> track.localUri?.let { existing[it] = track } }
+            for (track in parsed) {
+                val uri = track.localUri ?: continue
+                val previous = existing[uri]
                 if (previous?.artworkUrl != null && previous.artworkUrl != track.artworkUrl) {
                     deleteArtwork(previous.artworkUrl)
                 }
-                existing[uri.toString()] = track
-                added++
+                existing[uri] = track
             }
+            saveLocked(existing.values.toList())
         }
-        if (added > 0) save(existing.values.toList())
-        return added
+        return parsed.size
     }
 
-    fun remove(track: Track) {
+    fun remove(track: Track) = synchronized(lock) {
         deleteArtwork(track.artworkUrl)
-        save(all().filterNot { it.id == track.id })
+        saveLocked(all().filterNot { it.id == track.id })
     }
 
     private fun readTrack(uri: Uri): Track {
@@ -153,9 +167,11 @@ class LocalLibrary(context: Context) {
         }
     }
 
-    private fun save(items: List<Track>) {
+    private fun saveLocked(items: List<Track>) {
+        val snapshot = items.toList()
+        cachedTracks = snapshot
         val array = JSONArray()
-        items.forEach { track ->
+        snapshot.forEach { track ->
             val uri = track.localUri ?: return@forEach
             array.put(
                 JSONObject()
