@@ -158,7 +158,10 @@ class SessionAudioCache(
     private fun trimToLimit(limit: Long = settings.maxBytes) {
         var total = currentBytes()
         if (total <= limit) return
-        val files = dir.listFiles()?.sortedBy { it.lastModified() }.orEmpty()
+        val files = dir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".audio") }
+            ?.sortedBy { it.lastModified() }
+            .orEmpty()
         for (file in files) {
             if (total <= limit) break
             val len = file.length()
