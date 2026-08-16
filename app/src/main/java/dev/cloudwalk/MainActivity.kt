@@ -62,6 +62,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var showingFlow = true
     private var lowPowerMode = false
     private var progressTicker: Runnable? = null
+    private var activityVisible = false
     private var playbackServiceStop: Runnable? = null
     private var sleepTimerRunnable: Runnable? = null
     private var sleepAtTrackEnd = false
@@ -1651,7 +1652,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun startProgressTicker() {
         stopProgressTicker()
-        if (!playing) return
+        if (!playing || !activityVisible) return
         progressTicker = object : Runnable {
             override fun run() {
                 if (!playing) return
@@ -1671,7 +1672,25 @@ class MainActivity : Activity(), PlaybackController.Listener {
         progressTicker = null
     }
 
-    override fun onBuffering(track: Track) { showTrack(track); stopProgressTicker() }
+    override fun onStart() {
+        super.onStart()
+        activityVisible = true
+        if (playing) startProgressTicker()
+    }
+
+    override fun onStop() {
+        activityVisible = false
+        stopProgressTicker()
+        super.onStop()
+    }
+
+    override fun onBuffering(track: Track) {
+        playing = false
+        showTrack(track)
+        stopProgressTicker()
+        updatePlayButton()
+        updateMediaSession()
+    }
     override fun onReady(track: Track, durationMs: Int) { showTrack(track) }
     override fun onPlayingChanged(track: Track, playing: Boolean) {
         this.playing = playing
