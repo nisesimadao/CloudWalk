@@ -5,6 +5,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 class SessionAudioCache(
     context: Context,
@@ -16,6 +17,9 @@ class SessionAudioCache(
     private val io = Executors.newSingleThreadExecutor()
     private val registry = LinkedHashMap<String, Track>()
     private val registryLock = Any()
+    private val cacheGeneration = AtomicInteger()
+    @Volatile private var activeConnection: HttpURLConnection? = null
+    @Volatile private var closed = false
 
     init {
         dir.mkdirs()
@@ -32,35 +36,48 @@ class SessionAudioCache(
     }
 
     fun cache(track: Track, resolvedUrl: String, onProgress: (Int) -> Unit = {}, callback: (Boolean, String) -> Unit) {
+        if (closed) return
+        val requestGeneration = cacheGeneration.get()
         io.execute {
+            if (closed || requestGeneration != cacheGeneration.get()) return@execute
             val target = fileFor(track)
+            val partial = File(dir, "${target.name}.part")
             if (target.exists() && target.length() > 0L) {
                 remember(track)
-                callback(true, appContext.getString(R.string.cached_for_session))
+                if (!closed) callback(true, appContext.getString(R.string.cached_for_session))
                 return@execute
             }
-
+            partial.delete()
+            var failureMessage = appContext.getString(R.string.couldnt_cache_track)
             val ok = runCatching {
                 val connection = URL(resolvedUrl).openConnection() as HttpURLConnection
+                activeConnection = connection
                 try {
                     connection.connectTimeout = 8_000
                     connection.readTimeout = 20_000
                     connection.instanceFollowRedirects = true
                     val length = connection.contentLengthLong
-                    if (length > settings.maxBytes) return@runCatching false
-                    if (!ensureCapacity(length.coerceAtLeast(0L))) return@runCatching false
+                    if (length > settings.maxBytes) {
+                        failureMessage = appContext.getString(R.string.session_cache_full)
+                        return@runCatching false
+                    }
+                    if (!ensureCapacity(length.coerceAtLeast(0L))) {
+                        failureMessage = appContext.getString(R.string.session_cache_full)
+                        return@runCatching false
+                    }
 
                     connection.inputStream.use { input ->
-                        target.outputStream().buffered().use { output ->
+                        partial.outputStream().buffered().use { output ->
                             val buffer = ByteArray(32 * 1024)
                             var total = 0L
                             var lastProgress = -1
                             while (true) {
+                                if (closed || requestGeneration != cacheGeneration.get()) return@runCatching false
                                 val read = input.read(buffer)
                                 if (read <= 0) break
                                 total += read
-                                if (total + otherCacheBytes(target) > settings.maxBytes) {
-                                    target.delete()
+                                if (total + otherCacheBytes(partial) > settings.maxBytes) {
+                                    failureMessage = appContext.getString(R.string.session_cache_full)
                                     return@runCatching false
                                 }
                                 output.write(buffer, 0, read)
@@ -68,20 +85,28 @@ class SessionAudioCache(
                                     val progress = ((total * 100L) / length).toInt().coerceIn(0, 100)
                                     if (progress >= lastProgress + 2 || progress == 100) {
                                         lastProgress = progress
-                                        onProgress(progress)
+                                        if (!closed) onProgress(progress)
                                     }
                                 }
                             }
+                            output.flush()
                         }
                     }
-                    target.length() > 0L
+                    if (closed || requestGeneration != cacheGeneration.get()) return@runCatching false
+                    if (partial.length() <= 0L || (length > 0L && partial.length() != length)) return@runCatching false
+                    if (target.exists()) target.delete()
+                    partial.renameTo(target)
                 } finally {
+                    if (activeConnection === connection) activeConnection = null
                     connection.disconnect()
                 }
             }.getOrDefault(false)
 
+            if (!ok) partial.delete()
             if (ok) remember(track)
-            callback(ok, if (ok) appContext.getString(R.string.cached_for_session) else appContext.getString(R.string.session_cache_full))
+            if (!closed && requestGeneration == cacheGeneration.get()) {
+                callback(ok, if (ok) appContext.getString(R.string.cached_for_session) else failureMessage)
+            }
         }
     }
 
@@ -103,14 +128,21 @@ class SessionAudioCache(
     }
 
     fun clear() {
+        cacheGeneration.incrementAndGet()
+        activeConnection?.disconnect()
         dir.listFiles()?.forEach { it.delete() }
         synchronized(registryLock) { registry.clear() }
     }
 
     fun close() {
-        clear()
-        runCatching { dir.delete() }
+        if (closed) return
+        closed = true
+        cacheGeneration.incrementAndGet()
+        activeConnection?.disconnect()
         io.shutdownNow()
+        dir.listFiles()?.forEach { it.delete() }
+        synchronized(registryLock) { registry.clear() }
+        runCatching { dir.delete() }
     }
 
     private fun ensureCapacity(incomingBytes: Long): Boolean {
