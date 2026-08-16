@@ -32,8 +32,10 @@ class PlaybackController(
         .build()
 
     private var player: MediaPlayer? = null
+    @Volatile private var prepared = false
     private var currentTrack: Track? = null
     private var resumeAfterFocusGain = false
+    @Volatile private var desiredPlaying = false
     private var released = false
     private val playGeneration = AtomicInteger()
 
@@ -65,6 +67,7 @@ class PlaybackController(
                     player?.runCatching { setVolume(0.25f, 0.25f) }
                 }
                 AudioManager.AUDIOFOCUS_LOSS -> {
+                    desiredPlaying = false
                     resumeAfterFocusGain = false
                     pauseInternal(abandonFocus = false)
                     abandonAudioFocus()
@@ -102,6 +105,7 @@ class PlaybackController(
         }
 
         val generation = playGeneration.incrementAndGet()
+        desiredPlaying = true
         releasePlayer()
         currentTrack = track
         listener?.onBuffering(track)
@@ -182,44 +186,60 @@ class PlaybackController(
     }
 
     private inline fun createPlayer(track: Track, crossinline dataSource: MediaPlayer.() -> Unit) {
-        val mediaPlayer = MediaPlayer().apply {
-            setAudioAttributes(audioAttributes)
-            dataSource()
-            setOnPreparedListener { prepared ->
-                if (prepared !== player || currentTrack?.id != track.id || released) return@setOnPreparedListener
-                listener?.onReady(track, prepared.duration)
-                if (requestAudioFocus()) {
-                    prepared.start()
+        val mediaPlayer = MediaPlayer()
+        player = mediaPlayer
+        prepared = false
+        runCatching {
+            mediaPlayer.setAudioAttributes(audioAttributes)
+            mediaPlayer.dataSource()
+            mediaPlayer.setOnPreparedListener { readyPlayer ->
+                if (readyPlayer !== player || currentTrack?.id != track.id || released) return@setOnPreparedListener
+                prepared = true
+                listener?.onReady(track, readyPlayer.duration)
+                if (desiredPlaying && requestAudioFocus()) {
+                    readyPlayer.start()
                     listener?.onPlayingChanged(track, true)
                 } else {
                     listener?.onPlayingChanged(track, false)
                 }
             }
-            setOnCompletionListener { completed ->
+            mediaPlayer.setOnCompletionListener { completed ->
                 if (completed !== player || currentTrack?.id != track.id || released) return@setOnCompletionListener
+                desiredPlaying = false
                 abandonAudioFocus()
                 listener?.onPlayingChanged(track, false)
                 listener?.onCompleted(track)
             }
-            setOnErrorListener { failed, what, extra ->
+            mediaPlayer.setOnErrorListener { failed, what, extra ->
                 if (failed !== player || currentTrack?.id != track.id || released) return@setOnErrorListener true
+                prepared = false
+                desiredPlaying = false
                 abandonAudioFocus()
                 listener?.onError(track, appContext.getString(R.string.media_player_error, what, extra))
                 main.post { if (failed === player) releasePlayer() }
                 true
             }
-            prepareAsync()
+            mediaPlayer.prepareAsync()
+        }.onFailure { error ->
+            if (mediaPlayer === player) releasePlayer()
+            if (!released && currentTrack?.id == track.id) {
+                listener?.onError(track, error.message ?: appContext.getString(R.string.playback_failed))
+            }
         }
-        player = mediaPlayer
     }
 
     fun pause() {
+        desiredPlaying = false
         resumeAfterFocusGain = false
         pauseInternal(abandonFocus = true)
     }
 
     private fun pauseInternal(abandonFocus: Boolean) {
-        val p = player ?: return
+        val p = player
+        if (p == null || !prepared) {
+            if (abandonFocus) abandonAudioFocus()
+            return
+        }
         if (runCatching { p.isPlaying }.getOrDefault(false)) {
             runCatching { p.pause() }
             currentTrack?.let { listener?.onPlayingChanged(it, false) }
@@ -228,12 +248,14 @@ class PlaybackController(
     }
 
     fun resume() {
+        desiredPlaying = true
         resumeAfterFocusGain = false
         resumeInternal(requestFocus = true)
     }
 
     private fun resumeInternal(requestFocus: Boolean) {
         val p = player ?: return
+        if (!prepared) return
         if (requestFocus && !requestAudioFocus()) return
         if (!runCatching { p.isPlaying }.getOrDefault(false)) {
             p.runCatching {
@@ -246,16 +268,17 @@ class PlaybackController(
     }
 
     fun toggle() {
-        if (isPlaying()) pause() else resume()
+        if (desiredPlaying) pause() else resume()
     }
 
     fun seekTo(positionMs: Int) {
+        if (!prepared) return
         player?.runCatching { seekTo(positionMs.coerceAtLeast(0)) }
     }
 
-    fun currentPosition(): Int = player?.let { runCatching { it.currentPosition }.getOrDefault(0) } ?: 0
-    fun duration(): Int = player?.let { runCatching { it.duration.coerceAtLeast(0) }.getOrDefault(0) } ?: 0
-    fun isPlaying(): Boolean = player?.let { runCatching { it.isPlaying }.getOrDefault(false) } == true
+    fun currentPosition(): Int = if (prepared) player?.let { runCatching { it.currentPosition }.getOrDefault(0) } ?: 0 else 0
+    fun duration(): Int = if (prepared) player?.let { runCatching { it.duration.coerceAtLeast(0) }.getOrDefault(0) } ?: 0 else 0
+    fun isPlaying(): Boolean = prepared && player?.let { runCatching { it.isPlaying }.getOrDefault(false) } == true
 
     private fun requestAudioFocus(): Boolean =
         audioManager.requestAudioFocus(focusRequest) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
@@ -268,6 +291,7 @@ class PlaybackController(
         if (released) return
         released = true
         playGeneration.incrementAndGet()
+        desiredPlaying = false
         resumeAfterFocusGain = false
         abandonAudioFocus()
         releasePlayer()
@@ -278,6 +302,7 @@ class PlaybackController(
     private fun releasePlayer() {
         val old = player ?: return
         player = null
+        prepared = false
         if (runCatching { old.isPlaying }.getOrDefault(false)) runCatching { old.stop() }
         runCatching { old.reset() }
         runCatching { old.release() }
