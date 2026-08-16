@@ -1215,7 +1215,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 setOnItemClickListener { _, _, position, _ ->
                     val track = queueItems[position]
                     val homeIndex = homeTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
-                    flowView.setSelected(homeIndex, false); play(track); showNowPlaying(track)
+                    flowView.setSelected(homeIndex, false)
+                    play(track)
+                    closeOverlay()
+                    showNowPlaying(track)
                 }
                 setOnItemLongClickListener { _, _, position, _ -> showTrackMenu(queueItems[position], allowRemoveFromQueue = true); true }
             }
