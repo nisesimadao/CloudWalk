@@ -899,12 +899,25 @@ class MainActivity : Activity(), PlaybackController.Listener {
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         val search = SearchView(this).apply { queryHint = getString(R.string.search_hint); isIconified = false; imeOptions = EditorInfo.IME_ACTION_SEARCH }
         screen.addView(search, LinearLayout.LayoutParams(-1, dp(58)))
+        val searchStatus = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Color.rgb(155, 155, 155))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), 0, dp(20), 0)
+            visibility = View.GONE
+        }
+        screen.addView(searchStatus, LinearLayout.LayoutParams(-1, dp(32)))
         val results = ListView(this).apply {
             divider = ColorDrawable(Color.rgb(40, 40, 40)); dividerHeight = 1; selector = selectableBackground(); isVerticalScrollBarEnabled = false
             installArtworkScrollPolicy(this)
         }
         screen.addView(results, LinearLayout.LayoutParams(-1, 0, 1f))
+        fun showSearchStatus(message: String?) {
+            searchStatus.text = message.orEmpty()
+            searchStatus.visibility = if (message.isNullOrBlank()) View.GONE else View.VISIBLE
+        }
         fun showResults(items: List<Track>) {
+            showSearchStatus(null)
             results.adapter = TrackAdapter(items)
             installSwipeToCache(results, items)
             results.setOnItemClickListener { _, _, position, _ ->
@@ -927,9 +940,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
             if (!isOnline()) {
                 showResults(emptyList())
-                toast(getString(R.string.offline))
+                showSearchStatus(getString(R.string.offline))
                 return
             }
+            showSearchStatus(getString(R.string.searching))
             searchInFlight = true
             io.execute {
                 val attempt = runCatching {
@@ -945,9 +959,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 main.post {
                     searchInFlight = false
                     if (overlay === screen && serial == searchSerial) {
-                        attempt.onSuccess(::showResults).onFailure {
+                        attempt.onSuccess { items ->
+                            showResults(items)
+                            if (items.isEmpty()) showSearchStatus(getString(R.string.no_results))
+                        }.onFailure {
                             showResults(emptyList())
-                            toast(getString(R.string.search_failed))
+                            showSearchStatus(getString(R.string.search_failed))
                         }
                     }
                     val next = queuedSearch

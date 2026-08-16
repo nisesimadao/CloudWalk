@@ -33,4 +33,6 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="sleep_cancelled">スリープタイマーOFF</string>
     <string name="offline">インターネットに接続されていません</string>
     <string name="share_track">共有</string>
+    <string name="searching">検索中…</string>
+    <string name="no_results">結果がありません</string>
 </resources>
