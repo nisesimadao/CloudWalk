@@ -18,6 +18,8 @@ WebViewや重いUIフレームワークを使わず、AndroidのネイティブV
 
 Android 8.0 (API 26) 以上。
 
+APK: [GitHub Releases](https://github.com/nisesimadao/CloudWalk/releases)
+
 ## English
 
 CloudWalk is a project for building a **very lightweight SoundCloud client for Android**.
@@ -33,3 +35,5 @@ It is still experimental. Public-track search/playback may break when SoundCloud
 ```
 
 Android 8.0 (API 26) or newer.
+
+APK: [GitHub Releases](https://github.com/nisesimadao/CloudWalk/releases)

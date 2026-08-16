@@ -1235,7 +1235,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (playback.canSessionCache(track)) actions.add(if (playback.isSessionCached(track)) getString(R.string.remove_session_cache) else getString(R.string.keep_for_session))
         if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.artist_tracks))
         if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.related_tracks))
-        if (!track.permalinkUrl.isNullOrBlank()) actions.add(getString(R.string.open_soundcloud))
+        if (!track.permalinkUrl.isNullOrBlank()) {
+            actions.add(getString(R.string.open_soundcloud))
+            actions.add(getString(R.string.share_track))
+        }
         if (allowRemoveFromQueue && selectedTrack?.id != track.id) actions.add(getString(R.string.remove_from_queue))
         AlertDialog.Builder(this)
             .setTitle(track.title)
@@ -1285,6 +1288,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         }
                     }
                     getString(R.string.open_soundcloud) -> track.permalinkUrl?.let { runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(it))) } }
+                    getString(R.string.share_track) -> track.permalinkUrl?.let { url ->
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, url)
+                        }
+                        startActivity(Intent.createChooser(share, getString(R.string.share_track)))
+                    }
                     getString(R.string.remove_from_queue) -> {
                         homeTracks.removeAll { it.id == track.id }
                         shuffledTrackIds.remove(track.id)
