@@ -110,8 +110,12 @@ class SessionAudioCache(
         }
     }
 
+    fun isCached(track: Track): Boolean = synchronized(registryLock) {
+        registry.containsKey(track.id)
+    }
+
     fun cachedTracks(): List<Track> = synchronized(registryLock) {
-        registry.values.filter { cachedFile(it) != null }.toList().asReversed()
+        registry.values.toList().asReversed()
     }
 
     fun remove(track: Track): Boolean {

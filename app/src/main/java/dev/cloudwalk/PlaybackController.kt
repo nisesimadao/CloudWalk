@@ -165,7 +165,7 @@ class PlaybackController(
         }
     }
 
-    fun isSessionCached(track: Track): Boolean = sessionCache.cachedFile(track) != null
+    fun isSessionCached(track: Track): Boolean = sessionCache.isCached(track)
 
     private fun resolveStream(track: Track): String = if (!track.streamUrl.isNullOrBlank()) {
         webApi.resolvePublicStream(track.streamUrl)
