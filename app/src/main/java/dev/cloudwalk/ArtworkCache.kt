@@ -24,12 +24,14 @@ class ArtworkCache(context: Context) {
     private val pendingLock = Any()
     private val diskLock = Any()
     private var downloadsSinceTrim = 0
+    @Volatile private var closed = false
 
     init {
         io.execute { trimDiskCache() }
     }
 
     fun load(url: String?, into: ImageView, targetPx: Int = 256) {
+        if (closed) return
         val bucket = bucketFor(targetPx)
         if (url.isNullOrBlank()) {
             into.tag = null
@@ -50,13 +52,13 @@ class ArtworkCache(context: Context) {
     }
 
     fun peek(url: String?, targetPx: Int): Bitmap? {
-        if (url.isNullOrBlank()) return null
+        if (closed || url.isNullOrBlank()) return null
         val bucket = bucketFor(targetPx)
         return memory.get(key(url, bucket)) ?: fallbackBitmap(url, bucket)
     }
 
     fun prefetch(url: String?, targetPx: Int, onReady: (() -> Unit)? = null) {
-        if (url.isNullOrBlank()) return
+        if (closed || url.isNullOrBlank()) return
         val bucket = bucketFor(targetPx)
         if (memory.get(key(url, bucket)) != null) {
             onReady?.invoke()
@@ -77,6 +79,7 @@ class ArtworkCache(context: Context) {
     }
 
     private fun request(url: String, bucket: Int, onReady: ((Bitmap) -> Unit)? = null) {
+        if (closed) return
         val cacheKey = key(url, bucket)
         memory.get(cacheKey)?.let { bitmap ->
             onReady?.invoke(bitmap)
@@ -96,9 +99,15 @@ class ArtworkCache(context: Context) {
         io.execute {
             val bitmap = loadBitmap(url, bucket)
             val listeners = synchronized(pendingLock) { pending.remove(cacheKey).orEmpty() }
+            if (closed) {
+                bitmap?.recycle()
+                return@execute
+            }
             if (bitmap != null) {
                 memory.put(cacheKey, bitmap)
-                if (listeners.isNotEmpty()) main.post { listeners.forEach { it(bitmap) } }
+                if (listeners.isNotEmpty()) main.post {
+                    if (!closed) listeners.forEach { it(bitmap) }
+                }
             }
         }
     }
@@ -205,6 +214,10 @@ class ArtworkCache(context: Context) {
     }
 
     fun close() {
+        if (closed) return
+        closed = true
+        synchronized(pendingLock) { pending.clear() }
+        main.removeCallbacksAndMessages(null)
         io.shutdownNow()
         memory.evictAll()
     }
