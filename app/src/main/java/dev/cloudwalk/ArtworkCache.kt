@@ -14,6 +14,7 @@ import java.util.concurrent.Executors
 
 class ArtworkCache(context: Context) {
     private val compactDevice = context.resources.configuration.screenWidthDp <= 400
+    private val maxDiskBytes = if (compactDevice) 24L * 1024L * 1024L else 48L * 1024L * 1024L
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(if (compactDevice) 1 else 2)
     private val memory = object : LruCache<String, Bitmap>((if (compactDevice) 4 else 6) * 1024 * 1024) {
@@ -155,32 +156,54 @@ class ArtworkCache(context: Context) {
         synchronized(diskLock) {
             val files = dir.listFiles()?.filter { it.isFile }.orEmpty()
             var total = files.sumOf { it.length() }
-            if (total <= MAX_DISK_BYTES) return
+            if (total <= maxDiskBytes) return
             for (file in files.sortedBy { it.lastModified() }) {
-                if (file == excluding) continue
-                if (total <= MAX_DISK_BYTES) break
+                if (file == excluding || file.name.endsWith(".part")) continue
+                if (total <= maxDiskBytes) break
                 val size = file.length()
                 if (file.delete()) total -= size
             }
         }
     }
 
-    private fun download(url: String, file: File): Boolean = runCatching {
-        val connection = URL(url).openConnection() as HttpURLConnection
+    private fun download(url: String, file: File): Boolean {
+        val partial = File(file.parentFile, "${file.name}.part")
+        partial.delete()
+        var success = false
+        val connection = runCatching { URL(url).openConnection() as HttpURLConnection }.getOrNull() ?: return false
         try {
             connection.connectTimeout = 6_000
             connection.readTimeout = 8_000
             connection.useCaches = true
             connection.instanceFollowRedirects = true
-            if (connection.responseCode !in 200..299) return@runCatching false
+            if (connection.responseCode !in 200..299) return false
+            val expected = connection.contentLengthLong
+            if (expected > MAX_ARTWORK_DOWNLOAD_BYTES) return false
             connection.inputStream.use { input ->
-                file.outputStream().buffered().use { output -> input.copyTo(output, 16 * 1024) }
+                partial.outputStream().buffered().use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        total += read
+                        if (total > MAX_ARTWORK_DOWNLOAD_BYTES) return false
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
             }
-            file.length() > 0L
+            if (partial.length() <= 0L || (expected > 0L && partial.length() != expected)) return false
+            if (file.exists()) file.delete()
+            success = partial.renameTo(file)
+            return success
+        } catch (_: Throwable) {
+            return false
         } finally {
             connection.disconnect()
+            if (!success) partial.delete()
         }
-    }.getOrDefault(false)
+    }
 
     private fun decodeSampled(file: File, targetPx: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -223,6 +246,6 @@ class ArtworkCache(context: Context) {
     }
 
     companion object {
-        private const val MAX_DISK_BYTES = 48L * 1024L * 1024L
+        private const val MAX_ARTWORK_DOWNLOAD_BYTES = 8L * 1024L * 1024L
     }
 }
