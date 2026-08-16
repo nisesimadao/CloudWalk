@@ -205,6 +205,7 @@ class PlaybackController(
                 if (failed !== player || currentTrack?.id != track.id || released) return@setOnErrorListener true
                 abandonAudioFocus()
                 listener?.onError(track, appContext.getString(R.string.media_player_error, what, extra))
+                main.post { if (failed === player) releasePlayer() }
                 true
             }
             prepareAsync()
@@ -275,11 +276,10 @@ class PlaybackController(
     }
 
     private fun releasePlayer() {
-        player?.runCatching {
-            if (isPlaying) stop()
-            reset()
-            release()
-        }
+        val old = player ?: return
         player = null
+        if (runCatching { old.isPlaying }.getOrDefault(false)) runCatching { old.stop() }
+        runCatching { old.reset() }
+        runCatching { old.release() }
     }
 }
