@@ -250,7 +250,6 @@ class PlaybackController(
         releasePlayer()
         runCatching { appContext.unregisterReceiver(noisyReceiver) }
         io.shutdownNow()
-        sessionCache.clear()
     }
 
     private fun releasePlayer() {

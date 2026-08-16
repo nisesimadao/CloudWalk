@@ -1287,9 +1287,11 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun showOverlay(view: View) {
         val current = overlay
         if (current === view) return
+        overlayStack.remove(view)
         if (current != null) {
             (current.parent as? ViewGroup)?.removeView(current)
             overlayStack.addLast(current)
+            while (overlayStack.size > 6) overlayStack.removeFirst()
         }
         overlay = view
         attachOverlay(view)
@@ -1695,6 +1697,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         cancelSleepTimer(false)
         stopPlaybackKeepAliveNow()
         playback.release()
+        sessionCache.close()
         artwork.close()
         if (::mediaSession.isInitialized) mediaSession.release()
         io.shutdownNow()
