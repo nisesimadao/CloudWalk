@@ -609,41 +609,69 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setBackgroundColor(Color.rgb(12,12,12)); title = getString(R.string.library); setTitleTextColor(Color.WHITE)
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
-        val list = ListView(this).apply {
-            divider = ColorDrawable(Color.rgb(38,38,38)); dividerHeight = 1
-            selector = selectableBackground(); isVerticalScrollBarEnabled = false
+
+        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.rgb(12,12,12))
+            setPadding(0, dp(4), 0, dp(12))
         }
+
+        fun addSection(label: String) {
+            body.addView(TextView(this).apply {
+                text = label
+                textSize = 11f
+                setTextColor(Color.rgb(132,132,132))
+                typeface = Typeface.create("sans", Typeface.BOLD)
+                letterSpacing = 0.08f
+                gravity = Gravity.BOTTOM or Gravity.START
+                setPadding(dp(20), 0, dp(20), dp(6))
+            }, LinearLayout.LayoutParams(-1, dp(34)))
+        }
+
+        fun addRow(label: String, action: () -> Unit) {
+            body.addView(TextView(this).apply {
+                text = label
+                textSize = 17f
+                setTextColor(Color.rgb(238,238,238))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), 0, dp(20), 0)
+                background = selectableBackground()
+                isClickable = true
+                isFocusable = true
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(-1, dp(56)))
+            body.addView(View(this).apply { setBackgroundColor(Color.rgb(35,35,35)) }, LinearLayout.LayoutParams(-1, 1))
+        }
+
         val local = localLibrary.all()
         val albumCount = local.map { it.album?.takeIf(String::isNotBlank) ?: getString(R.string.unknown_album) }.distinct().size
         val artistCount = local.map { it.artist.ifBlank { getString(R.string.unknown_artist) } }.distinct().size
         val recentCount = collections.recent().size
-        val likeCount = collections.likes().size
         val cacheMb = sessionCache.currentBytes().toDouble() / (1024.0 * 1024.0)
         val cachedLabel = if (cacheMb < 0.05) getString(R.string.cached_empty) else getString(R.string.cached_size, "%.1f".format(cacheMb))
-        val common = arrayOf(
-            getString(R.string.songs_count, local.size),
-            getString(R.string.albums_count, albumCount),
-            getString(R.string.artists_count, artistCount),
-            cachedLabel,
-            getString(R.string.recent_count, recentCount),
-            getString(R.string.likes_count, likeCount)
-        )
-        val entries = if (hasAccount()) common + arrayOf(getString(R.string.soundcloud_likes), getString(R.string.playlists))
-        else common + arrayOf(getString(R.string.connect_soundcloud))
-        list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, entries)
-        list.setOnItemClickListener { _, _, position, _ ->
-            when (position) {
-                0 -> showLocalFiles()
-                1 -> showLocalGroups(true)
-                2 -> showLocalGroups(false)
-                3 -> showCachedTracks()
-                4 -> showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
-                5 -> showLikes()
-                6 -> if (hasAccount()) showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } else showConnectScreen(getString(R.string.soundcloud))
-                7 -> if (hasAccount()) showPlaylists()
-            }
+
+        addSection(getString(R.string.library_on_device))
+        addRow(getString(R.string.songs_count, local.size)) { showLocalFiles() }
+        addRow(getString(R.string.albums_count, albumCount)) { showLocalGroups(true) }
+        addRow(getString(R.string.artists_count, artistCount)) { showLocalGroups(false) }
+
+        addSection(getString(R.string.library_cloudwalk))
+        addRow(cachedLabel) { showCachedTracks() }
+        addRow(getString(R.string.recent_count, recentCount)) {
+            showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
         }
-        screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        addSection(getString(R.string.library_soundcloud))
+        if (hasAccount()) {
+            addRow(getString(R.string.soundcloud_likes)) { showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } }
+            addRow(getString(R.string.playlists)) { showPlaylists() }
+        } else {
+            addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
+        }
+
+        scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
+        screen.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         screen.addView(buildBottomNav(3), LinearLayout.LayoutParams(-1, dp(64)))
         showTopLevelOverlay(screen)
     }
@@ -1157,7 +1185,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 }
             }
             addView(nowPlayingLike, Toolbar.LayoutParams(dp(48), -1).apply { gravity = Gravity.END })
-            menu.add(getString(R.string.sleep_timer))
+            menu.add(getString(R.string.sleep_timer)).apply {
+                setIcon(R.drawable.ic_sleep)
+                setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS)
+            }
             setOnMenuItemClickListener { item ->
                 if (item.title == getString(R.string.sleep_timer)) { showSleepTimerDialog(); true } else false
             }
