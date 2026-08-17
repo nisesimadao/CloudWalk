@@ -90,6 +90,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var nowPlayingLike: ImageButton? = null
     private var nowPlayingShuffle: ImageButton? = null
     private var nowPlayingRepeat: ImageButton? = null
+    private var tabMiniRefresh: (() -> Unit)? = null
     private var shuffleEnabled = false
     private enum class RepeatMode { OFF, ALL, ONE }
     private var repeatMode = RepeatMode.OFF
@@ -403,7 +404,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         elevation = dp(2).toFloat()
         setContentInsetsRelative(dp(20), dp(8))
         addView(ImageButton(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_more_vert)
+            setImageResource(R.drawable.ic_view_options)
             setColorFilter(Color.WHITE)
             background = selectableBorderlessBackground()
             contentDescription = getString(R.string.view_options)
@@ -465,6 +466,57 @@ class MainActivity : Activity(), PlaybackController.Listener {
         updatePlayButton()
     }
 
+    private fun buildTabMiniPlayer(canShow: () -> Boolean = { true }): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(12), 0, dp(8), 0)
+        setBackgroundColor(Color.rgb(22, 22, 22))
+        background = selectableBackground()
+        isClickable = true
+        isFocusable = true
+
+        val art = ImageView(this@MainActivity).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.rgb(44, 44, 44))
+        }
+        addView(art, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginEnd = dp(10) })
+
+        val text = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val title = textLine(13f, Color.WHITE, true, Gravity.START or Gravity.CENTER_VERTICAL)
+        val artist = textLine(11f, Color.rgb(150, 150, 150), false, Gravity.START or Gravity.CENTER_VERTICAL)
+        text.addView(title, LinearLayout.LayoutParams(-1, dp(22)))
+        text.addView(artist, LinearLayout.LayoutParams(-1, dp(18)))
+        addView(text, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val button = ImageButton(this@MainActivity).apply {
+            setColorFilter(Color.WHITE)
+            background = selectableBorderlessBackground()
+            contentDescription = getString(R.string.play_pause)
+            setOnClickListener {
+                if (playback.duration() > 0) playback.toggle() else selectedTrack?.let { play(it) }
+            }
+        }
+        addView(button, LinearLayout.LayoutParams(dp(48), -1))
+        setOnClickListener { selectedTrack?.let(::showNowPlaying) }
+
+        val refresh = {
+            val track = selectedTrack
+            val hasSession = track != null && (playing || playback.duration() > 0) && canShow()
+            visibility = if (hasSession) View.VISIBLE else View.GONE
+            if (track != null && hasSession) {
+                title.text = track.title
+                artist.text = track.artist
+                artwork.load(track.artworkUrl, art, dp(40))
+                button.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+            }
+        }
+        tabMiniRefresh = refresh
+        refresh()
+    }
+
     private fun buildBottomNav(activeTab: Int = 0): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
@@ -502,6 +554,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlay = null
         overlayStack.clear()
         deferArtworkLoads = false
+        tabMiniRefresh = null
         syncHomeSurfaceVisibility()
     }
 
@@ -549,6 +602,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         if (topLevelTab != null) {
+            screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
             screen.addView(buildBottomNav(topLevelTab), LinearLayout.LayoutParams(-1, dp(64)))
             showTopLevelOverlay(screen)
         } else {
@@ -636,17 +690,18 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }, LinearLayout.LayoutParams(-1, dp(34)))
         }
 
-        fun addRow(label: String, action: () -> Unit) {
+        fun addRow(label: String, enabled: Boolean = true, action: () -> Unit) {
             body.addView(TextView(this).apply {
                 text = label
                 textSize = 17f
-                setTextColor(Color.rgb(238,238,238))
+                setTextColor(if (enabled) Color.rgb(238,238,238) else Color.rgb(112,112,112))
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(20), 0, dp(20), 0)
-                background = selectableBackground()
-                isClickable = true
-                isFocusable = true
-                setOnClickListener { action() }
+                background = if (enabled) selectableBackground() else null
+                isEnabled = enabled
+                isClickable = enabled
+                isFocusable = enabled
+                if (enabled) setOnClickListener { action() }
             }, LinearLayout.LayoutParams(-1, dp(56)))
             body.addView(View(this).apply { setBackgroundColor(Color.rgb(35,35,35)) }, LinearLayout.LayoutParams(-1, 1))
         }
@@ -660,12 +715,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
         addSection(getString(R.string.library_on_device))
         addRow(getString(R.string.songs_count, local.size)) { showLocalFiles() }
-        addRow(getString(R.string.albums_count, albumCount)) { showLocalGroups(true) }
-        addRow(getString(R.string.artists_count, artistCount)) { showLocalGroups(false) }
+        addRow(getString(R.string.albums_count, albumCount), local.isNotEmpty()) { showLocalGroups(true) }
+        addRow(getString(R.string.artists_count, artistCount), local.isNotEmpty()) { showLocalGroups(false) }
 
         addSection(getString(R.string.library_cloudwalk))
         addRow(cachedLabel) { showCachedTracks() }
-        addRow(getString(R.string.recent_count, recentCount)) {
+        addRow(getString(R.string.recent_count, recentCount), recentCount > 0) {
             showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
         }
 
@@ -681,6 +736,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
         scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
         screen.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
         screen.addView(buildBottomNav(3), LinearLayout.LayoutParams(-1, dp(64)))
         showTopLevelOverlay(screen)
     }
@@ -1164,6 +1220,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 return true
             }
         })
+        screen.addView(buildTabMiniPlayer { !search.hasFocus() }, LinearLayout.LayoutParams(-1, dp(52)))
+        search.setOnQueryTextFocusChangeListener { _, _ -> tabMiniRefresh?.invoke() }
         screen.addView(buildBottomNav(1), LinearLayout.LayoutParams(-1, dp(64)))
         showTopLevelOverlay(screen); search.requestFocus()
     }
@@ -1980,6 +2038,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         focusedTrack = track
         if (::flowView.isInitialized) flowView.playingTrackId = track.id
         if (overlay == null) refreshHomeTrackUi(track)
+        tabMiniRefresh?.invoke()
         if (changed) updateMediaSession()
     }
 
@@ -2010,6 +2069,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun updatePlayButton() {
         if (overlay == null && ::playButton.isInitialized) playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
         if (overlay === nowPlayingScreen) selectedTrack?.let { refreshNowPlaying(it) }
+        tabMiniRefresh?.invoke()
     }
 
     private fun startProgressTicker() {
