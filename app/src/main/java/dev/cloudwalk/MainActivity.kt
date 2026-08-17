@@ -1777,7 +1777,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
                                 playback.keepForSession(track, { percent ->
                                     action?.text = getString(R.string.caching_percent, percent)
                                 }) { ok, message ->
-                                    action?.text = if (ok) getString(R.string.cached_badge) else getString(R.string.cache_badge)
+                                    action?.apply {
+                                        text = if (ok) getString(R.string.cached_badge) else getString(R.string.cache_badge)
+                                        setBackgroundColor(if (ok) Color.rgb(72, 110, 72) else Color.rgb(205, 86, 26))
+                                    }
                                     toast(message)
                                 }
                             }
@@ -2071,7 +2074,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
             when {
                 !track.localUri.isNullOrBlank() -> { action.text = getString(R.string.local_badge); action.setBackgroundColor(Color.rgb(72, 72, 72)) }
                 playback.isSessionCached(track) -> { action.text = getString(R.string.cached_badge); action.setBackgroundColor(Color.rgb(72, 110, 72)) }
-                else -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
+                playback.canSessionCache(track) -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
+                else -> { action.text = ""; action.setBackgroundColor(Color.TRANSPARENT) }
             }
             row.findViewById<View?>(android.R.id.icon2)?.setOnTouchListener { handle, event ->
                 onDragTouch?.invoke(position, handle, event) == true
