@@ -112,6 +112,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
         uiPrefs = getSharedPreferences("cloudwalk_ui", MODE_PRIVATE)
         lowPowerMode = uiPrefs.getBoolean("low_power", false)
         showingFlow = uiPrefs.getBoolean("home_flow", true) && !lowPowerMode
+        shuffleEnabled = uiPrefs.getBoolean("shuffle", false)
+        repeatMode = RepeatMode.entries.getOrElse(uiPrefs.getInt("repeat_mode", 0)) { RepeatMode.OFF }
         val savedQueue = collections.queue()
         val recentHome = collections.recent()
         val startupQueue = if (savedQueue.isNotEmpty()) savedQueue else recentHome.take(30)
@@ -132,7 +134,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
             ) { handleBackAction() }
         }
-        homeTracks.firstOrNull()?.let { showTrack(it) }
+        if (homeTracks.isNotEmpty()) {
+            val lastId = uiPrefs.getString("last_track_id", null)
+            val initialIndex = homeTracks.indexOfFirst { it.id == lastId }.takeIf { it >= 0 } ?: 0
+            val initialTrack = homeTracks[initialIndex]
+            flowView.setSelected(initialIndex, false)
+            showTrack(initialTrack)
+            if (shuffleEnabled) rebuildShuffleOrder(initialTrack.id)
+            updateMediaSessionQueue()
+            updateMediaSession()
+        }
         handleAuthIntent(intent)
         handleSharedText(intent)
     }
@@ -1454,6 +1465,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun toggleShuffle() {
         shuffleEnabled = !shuffleEnabled
+        uiPrefs.edit().putBoolean("shuffle", shuffleEnabled).apply()
         rebuildShuffleOrder(selectedTrack?.id)
         updateMediaSessionQueue()
         selectedTrack?.let(::refreshNowPlaying)
@@ -1466,6 +1478,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             RepeatMode.ALL -> RepeatMode.ONE
             RepeatMode.ONE -> RepeatMode.OFF
         }
+        uiPrefs.edit().putInt("repeat_mode", repeatMode.ordinal).apply()
         selectedTrack?.let(::refreshNowPlaying)
         toast(when (repeatMode) { RepeatMode.OFF -> getString(R.string.repeat_off); RepeatMode.ALL -> getString(R.string.repeat_all); RepeatMode.ONE -> getString(R.string.repeat_one) })
     }
@@ -2050,7 +2063,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (::flowView.isInitialized) flowView.playingTrackId = track.id
         if (overlay == null) refreshHomeTrackUi(track)
         tabMiniRefresh?.invoke()
-        if (changed) updateMediaSession()
+        if (changed) {
+            uiPrefs.edit().putString("last_track_id", track.id).apply()
+            updateMediaSession()
+        }
     }
 
     private fun showFocusedTrack(track: Track) {
