@@ -194,20 +194,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
             .find(text)?.value?.trimEnd('.', ',', ')', ']', '}') ?: return
         if (!isOnline()) { toast(getString(R.string.offline)); return }
         io.execute {
-            val result = runCatching {
-                val track = webApi.resolveTrackUrl(url)
-                val isProfile = track == null && webApi.resolveProfileUrl(url) != null
-                track to isProfile
-            }
+            val result = runCatching { webApi.resolvePublicUrl(url) }
             main.post {
-                result.onSuccess { (track, isProfile) ->
+                result.onSuccess { resolved ->
                     when {
-                        track != null -> {
-                            updateHomeCollection(listOf(track), 0)
-                            play(track)
-                            showNowPlaying(track)
+                        resolved.track != null -> {
+                            updateHomeCollection(listOf(resolved.track), 0)
+                            play(resolved.track)
+                            showNowPlaying(resolved.track)
                         }
-                        isProfile -> showPublicProfileImport(url)
+                        resolved.profile != null -> showPublicProfileActions(resolved.profile)
                         else -> toast(getString(R.string.not_public_track))
                     }
                 }.onFailure { toast(getString(R.string.couldnt_open_link)) }
@@ -557,19 +553,31 @@ class MainActivity : Activity(), PlaybackController.Listener {
         isClickable = true
         isFocusable = true
         setOnClickListener { action() }
-        addView(ImageView(this@MainActivity).apply {
+        val icon = ImageView(this@MainActivity).apply {
             setImageResource(iconRes)
             setColorFilter(if (active) Color.rgb(255, 123, 38) else Color.rgb(165, 165, 165))
             scaleType = ImageView.ScaleType.CENTER
             contentDescription = label
-        }, LinearLayout.LayoutParams(-1, dp(30)))
-        addView(TextView(this@MainActivity).apply {
+        }
+        addView(icon, LinearLayout.LayoutParams(-1, dp(30)))
+        val tabLabel = TextView(this@MainActivity).apply {
             text = label
             textSize = 11f
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             typeface = Typeface.create("sans", if (active) Typeface.BOLD else Typeface.NORMAL)
             setTextColor(if (active) Color.WHITE else Color.rgb(148, 148, 148))
-        }, LinearLayout.LayoutParams(-1, dp(24)))
+        }
+        addView(tabLabel, LinearLayout.LayoutParams(-1, dp(24)))
+        if (active && !lowPowerMode) {
+            icon.scaleX = 0.82f
+            icon.scaleY = 0.82f
+            icon.alpha = 0.65f
+            tabLabel.alpha = 0.7f
+            post {
+                icon.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(120L).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+                tabLabel.animate().alpha(1f).setDuration(120L).start()
+            }
+        }
     }
 
     private fun hideKeyboard() {
@@ -1047,47 +1055,71 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     .setCancelable(false)
                     .show()
                 io.execute {
-                    val result = runCatching {
-                        val profile = webApi.resolveProfileUrl(url) ?: error("not_profile")
-                        val likes = webApi.profileLikes(profile, 300)
-                        val uploads = webApi.profileTracks(profile, 120)
-                        Triple(profile, likes, uploads)
-                    }
+                    val result = runCatching { webApi.resolveProfileUrl(url) ?: error("not_profile") }
                     main.post {
                         loading.dismiss()
-                        result.onSuccess { (profile, likes, uploads) ->
-                            val labels = ArrayList<String>(2)
-                            val actions = ArrayList<() -> Unit>(2)
-                            if (likes.isNotEmpty()) {
-                                labels += getString(R.string.import_public_likes, likes.size)
-                                actions += {
-                                    val added = collections.importLikes(likes)
-                                    toast(if (added > 0) getString(R.string.imported_likes, added) else getString(R.string.no_new_likes))
-                                }
-                            }
-                            if (uploads.isNotEmpty()) {
-                                labels += getString(R.string.use_public_tracks_queue, uploads.size)
-                                actions += {
-                                    updateHomeCollection(uploads, 0)
-                                    toast(getString(R.string.queue_replaced, uploads.size))
-                                }
-                            }
-                            if (labels.isEmpty()) {
-                                toast(getString(R.string.public_profile_empty))
-                            } else {
-                                AlertDialog.Builder(this)
-                                    .setTitle(profile.username)
-                                    .setItems(labels.toTypedArray()) { _, which -> actions[which].invoke() }
-                                    .setNegativeButton(getString(R.string.cancel), null)
-                                    .show()
-                            }
-                        }.onFailure {
+                        result.onSuccess(::showPublicProfileActions).onFailure {
                             toast(if (it.message == "not_profile") getString(R.string.public_profile_not_found) else getString(R.string.public_profile_failed))
                         }
                     }
                 }
             }
             .show()
+    }
+
+    private fun showPublicProfileActions(profile: SoundCloudPublicProfile) {
+        val labels = arrayOf(
+            getString(R.string.import_public_likes_action),
+            getString(R.string.use_public_tracks_queue_action)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(profile.username)
+            .setItems(labels) { _, which ->
+                when (which) {
+                    0 -> importPublicProfileLikes(profile)
+                    1 -> loadPublicProfileQueue(profile)
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun importPublicProfileLikes(profile: SoundCloudPublicProfile) {
+        val loading = AlertDialog.Builder(this)
+            .setMessage(getString(R.string.importing_public_likes))
+            .setCancelable(false)
+            .show()
+        io.execute {
+            val result = runCatching { webApi.profileLikes(profile, 300) }
+            main.post {
+                loading.dismiss()
+                result.onSuccess { likes ->
+                    if (likes.isEmpty()) toast(getString(R.string.public_profile_no_likes)) else {
+                        val added = collections.importLikes(likes)
+                        toast(if (added > 0) getString(R.string.imported_likes, added) else getString(R.string.no_new_likes))
+                    }
+                }.onFailure { toast(getString(R.string.public_profile_failed)) }
+            }
+        }
+    }
+
+    private fun loadPublicProfileQueue(profile: SoundCloudPublicProfile) {
+        val loading = AlertDialog.Builder(this)
+            .setMessage(getString(R.string.loading_public_uploads))
+            .setCancelable(false)
+            .show()
+        io.execute {
+            val result = runCatching { webApi.profileTracks(profile, 120) }
+            main.post {
+                loading.dismiss()
+                result.onSuccess { uploads ->
+                    if (uploads.isEmpty()) toast(getString(R.string.public_profile_no_uploads)) else {
+                        updateHomeCollection(uploads, 0)
+                        toast(getString(R.string.queue_replaced, uploads.size))
+                    }
+                }.onFailure { toast(getString(R.string.public_profile_failed)) }
+            }
+        }
     }
 
     private fun showConnectScreen(sectionTitle: String) {
@@ -1268,14 +1300,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
             searchInFlight = true
             io.execute {
                 val publicPaged = !isSoundCloudUrl(q) && !hasAccount()
-                var resolvedProfile = false
+                var resolvedProfile: SoundCloudPublicProfile? = null
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
-                        val track = webApi.resolveTrackUrl(q)
-                        if (track != null) listOf(track) else {
-                            resolvedProfile = webApi.resolveProfileUrl(q) != null
-                            emptyList()
-                        }
+                        val resolved = webApi.resolvePublicUrl(q)
+                        resolvedProfile = resolved.profile
+                        resolved.track?.let(::listOf).orEmpty()
                     } else if (hasAccount()) {
                         api.searchTracks(q, SEARCH_PAGE_SIZE)
                     } else {
@@ -1287,8 +1317,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     searchInFlight = false
                     if (overlay === screen && serial == searchSerial) {
                         attempt.onSuccess { items ->
-                            if (resolvedProfile) {
-                                showPublicProfileImport(q)
+                            resolvedProfile?.let { profile ->
+                                showPublicProfileActions(profile)
                                 return@onSuccess
                             }
                             showResults(items)
@@ -2256,10 +2286,29 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showFocusedTrack(track: Track) {
+        val changed = focusedTrack?.id != track.id
         focusedTrack = track
         if (overlay == null && ::titleView.isInitialized) {
-            titleView.text = track.title
-            artistView.text = track.artist
+            if (changed && showingFlow && !lowPowerMode && titleView.text.isNotEmpty()) {
+                titleView.animate().cancel()
+                artistView.animate().cancel()
+                titleView.animate().alpha(0.22f).translationY(-dp(2).toFloat()).setDuration(45L).withEndAction {
+                    titleView.text = track.title
+                    artistView.text = track.artist
+                    titleView.translationY = dp(2).toFloat()
+                    artistView.translationY = dp(2).toFloat()
+                    titleView.animate().alpha(1f).translationY(0f).setDuration(85L).start()
+                    artistView.animate().alpha(1f).translationY(0f).setDuration(85L).start()
+                }.start()
+                artistView.animate().alpha(0.22f).translationY(-dp(2).toFloat()).setDuration(45L).start()
+            } else {
+                titleView.alpha = 1f
+                artistView.alpha = 1f
+                titleView.translationY = 0f
+                artistView.translationY = 0f
+                titleView.text = track.title
+                artistView.text = track.artist
+            }
         }
     }
 

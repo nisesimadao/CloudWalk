@@ -67,4 +67,10 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="queue_replaced">Queue updated · %1$d tracks</string>
     <string name="load">Load</string>
     <string name="caching_badge">CACHING…</string>
+    <string name="import_public_likes_action">Import public likes</string>
+    <string name="use_public_tracks_queue_action">Use public uploads as queue</string>
+    <string name="importing_public_likes">Importing public likes…</string>
+    <string name="loading_public_uploads">Loading public uploads…</string>
+    <string name="public_profile_no_likes">No public track likes found</string>
+    <string name="public_profile_no_uploads">No playable public uploads found</string>
 </resources>

@@ -52,8 +52,8 @@ class CoverFlowView @JvmOverloads constructor(
     private val coverSize = 168f * density
     private val pageSpacing = 92f * density
     private val visualSpacing = 112f * density
-    private val sideScale = 0.80f
-    private val maxAngle = 52f
+    private val sideScale = 0.83f
+    private val maxAngle = 48f
     private val artworkTargetPx = min(320, (168f * density).toInt())
     private val previewArtworkTargetPx = min(96, artworkTargetPx)
     private var scrollOffset = 0f
@@ -114,10 +114,13 @@ class CoverFlowView @JvmOverloads constructor(
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             if (abs(distanceX) > abs(distanceY) * 0.72f) {
                 wasDragging = true
-                val proposed = scrollOffset + distanceX
+                val gestureMin = max(minOffset(), (gestureStartIndex - 2) * pageSpacing)
+                val gestureMax = min(maxOffset(), (gestureStartIndex + 2) * pageSpacing)
+                val proposed = scrollOffset + distanceX * 0.82f
+                val overscroll = pageSpacing * 0.22f
                 scrollOffset = when {
-                    proposed < minOffset() -> minOffset()
-                    proposed > maxOffset() -> maxOffset()
+                    proposed < gestureMin -> (gestureMin + (proposed - gestureMin) * 0.24f).coerceAtLeast(gestureMin - overscroll)
+                    proposed > gestureMax -> (gestureMax + (proposed - gestureMax) * 0.24f).coerceAtMost(gestureMax + overscroll)
                     else -> proposed
                 }
                 updateSelectionFromOffset()
@@ -347,8 +350,8 @@ class CoverFlowView @JvmOverloads constructor(
 
     private fun fillCoverPoints(out: FloatArray, cx: Float, cy: Float, half: Float, turn: Float, yOffset: Float) {
         val amount = abs(turn)
-        val farXInset = half * 0.34f * amount
-        val farYInset = half * 0.18f * amount
+        val farXInset = half * 0.29f * amount
+        val farYInset = half * 0.12f * amount
         val leftIsFar = turn > 0f
 
         if (leftIsFar) {

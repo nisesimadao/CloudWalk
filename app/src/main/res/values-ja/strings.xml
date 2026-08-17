@@ -67,4 +67,10 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="queue_replaced">キューを更新しました · %1$d曲</string>
     <string name="load">読み込む</string>
     <string name="caching_badge">キャッシュ中…</string>
+    <string name="import_public_likes_action">公開お気に入りを取り込む</string>
+    <string name="use_public_tracks_queue_action">公開投稿をキューにする</string>
+    <string name="importing_public_likes">公開お気に入りを取り込み中…</string>
+    <string name="loading_public_uploads">公開投稿を読み込み中…</string>
+    <string name="public_profile_no_likes">公開されている曲のお気に入りがありません</string>
+    <string name="public_profile_no_uploads">再生可能な公開投稿がありません</string>
 </resources>

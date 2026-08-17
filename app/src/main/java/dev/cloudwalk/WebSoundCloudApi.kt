@@ -37,30 +37,30 @@ class WebSoundCloudApi(context: Context) {
         return JSONObject(body).getString("url")
     }
 
-    fun resolveTrackUrl(inputUrl: String): Track? {
+    fun resolvePublicUrl(inputUrl: String): SoundCloudResolvedUrl {
         val soundCloudUrl = if (isShortUrl(inputUrl)) resolveRedirect(inputUrl) else inputUrl
         val encoded = URLEncoder.encode(soundCloudUrl, StandardCharsets.UTF_8.name())
         val body = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
         val item = JSONObject(body)
-        if (item.optString("kind") != "track") return null
-        return parseTrack(item)?.let { track ->
-            if (track.permalinkUrl.isNullOrBlank()) track.copy(permalinkUrl = soundCloudUrl) else track
+        return when (item.optString("kind")) {
+            "user" -> {
+                val id = item.optLong("id", 0L)
+                SoundCloudResolvedUrl(profile = if (id > 0) SoundCloudPublicProfile(
+                    id = id,
+                    username = item.optString("username").ifBlank { "SoundCloud" },
+                    permalinkUrl = item.optString("permalink_url").ifBlank { soundCloudUrl }
+                ) else null)
+            }
+            "track" -> SoundCloudResolvedUrl(track = parseTrack(item)?.let { track ->
+                if (track.permalinkUrl.isNullOrBlank()) track.copy(permalinkUrl = soundCloudUrl) else track
+            })
+            else -> SoundCloudResolvedUrl()
         }
     }
 
-    fun resolveProfileUrl(inputUrl: String): SoundCloudPublicProfile? {
-        val soundCloudUrl = if (isShortUrl(inputUrl)) resolveRedirect(inputUrl) else inputUrl
-        val encoded = URLEncoder.encode(soundCloudUrl, StandardCharsets.UTF_8.name())
-        val body = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
-        val item = JSONObject(body)
-        if (item.optString("kind") != "user") return null
-        val id = item.optLong("id", 0L).takeIf { it > 0 } ?: return null
-        return SoundCloudPublicProfile(
-            id = id,
-            username = item.optString("username").ifBlank { "SoundCloud" },
-            permalinkUrl = item.optString("permalink_url").ifBlank { soundCloudUrl }
-        )
-    }
+    fun resolveTrackUrl(inputUrl: String): Track? = resolvePublicUrl(inputUrl).track
+
+    fun resolveProfileUrl(inputUrl: String): SoundCloudPublicProfile? = resolvePublicUrl(inputUrl).profile
 
     fun profileLikes(profile: SoundCloudPublicProfile, limit: Int = 300): List<Track> {
         val out = ArrayList<Track>(minOf(limit, 300))
@@ -257,6 +257,11 @@ class WebSoundCloudApi(context: Context) {
     }
 }
 
+
+data class SoundCloudResolvedUrl(
+    val track: Track? = null,
+    val profile: SoundCloudPublicProfile? = null
+)
 
 data class SoundCloudPublicProfile(
     val id: Long,
