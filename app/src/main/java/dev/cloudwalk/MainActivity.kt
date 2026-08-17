@@ -1544,6 +1544,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun attachOverlay(view: View) {
+        deferArtworkLoads = false
         val base = overlayBasePadding.getOrPut(view) {
             intArrayOf(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)
         }
@@ -1568,6 +1569,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun closeOverlay() {
+        deferArtworkLoads = false
         val current = overlay ?: return
         (current.parent as? ViewGroup)?.removeView(current)
         overlay = null
