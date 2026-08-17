@@ -136,7 +136,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
         val now = android.os.SystemClock.uptimeMillis()
         if (now - lastBackHandledAt < 150L) return
         lastBackHandledAt = now
-        if (overlay != null) closeOverlay() else finish()
+        if (overlay != null) {
+            closeOverlay()
+        } else if (playing) {
+            moveTaskToBack(true)
+        } else {
+            finish()
+        }
     }
 
 
