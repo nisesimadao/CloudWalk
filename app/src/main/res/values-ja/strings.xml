@@ -38,4 +38,5 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="on_device">端末内</string>
     <string name="adding_tracks">曲を追加中…</string>
     <string name="now_playing_artwork">ジャケット。左右にスワイプして曲を移動できます。</string>
+    <string name="reorder">並べ替え</string>
 </resources>

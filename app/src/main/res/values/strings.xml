@@ -38,4 +38,5 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
     <string name="on_device">On device</string>
     <string name="adding_tracks">Adding tracks…</string>
     <string name="now_playing_artwork">Artwork. Swipe left or right to change track.</string>
+    <string name="reorder">Reorder</string>
 </resources>

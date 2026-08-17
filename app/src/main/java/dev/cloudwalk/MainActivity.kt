@@ -1270,9 +1270,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showQueue() {
-        val queueItems = if (shuffleEnabled && shuffledTrackIds.isNotEmpty()) {
+        val queueItems = (if (shuffleEnabled && shuffledTrackIds.isNotEmpty()) {
             shuffledTrackIds.mapNotNull { id -> homeTracks.firstOrNull { it.id == id } }
-        } else homeTracks.toList()
+        } else homeTracks.toList()).toMutableList()
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(12, 12, 12)) }
         val bar = Toolbar(this).apply {
             setBackgroundColor(Color.rgb(12, 12, 12))
@@ -1284,9 +1284,64 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (queueItems.isEmpty()) {
             screen.addView(TextView(this).apply { text = getString(R.string.queue_empty); gravity = Gravity.CENTER; setTextColor(Color.GRAY) }, LinearLayout.LayoutParams(-1, 0, 1f))
         } else {
-            val list = ListView(this).apply {
+            lateinit var list: ListView
+            lateinit var queueAdapter: TrackAdapter
+            var dragIndex = -1
+            var dragMoved = false
+
+            fun commitQueueOrder() {
+                if (shuffleEnabled) {
+                    shuffledTrackIds.clear()
+                    shuffledTrackIds.addAll(queueItems.map { it.id })
+                } else {
+                    val focusId = focusedTrack?.id
+                    homeTracks.clear()
+                    homeTracks.addAll(queueItems)
+                    flowView.tracks = homeTracks
+                    val focusIndex = homeTracks.indexOfFirst { it.id == focusId }
+                    if (focusIndex >= 0) flowView.setSelected(focusIndex, false)
+                    (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
+                }
+                updateMediaSessionQueue()
+            }
+
+            queueAdapter = TrackAdapter(queueItems) { position, _, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        dragIndex = position
+                        dragMoved = false
+                        list.requestDisallowInterceptTouchEvent(true)
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        if (dragIndex !in queueItems.indices) return@TrackAdapter true
+                        val location = IntArray(2)
+                        list.getLocationOnScreen(location)
+                        val localY = (event.rawY - location[1]).toInt()
+                        val target = list.pointToPosition(list.width / 2, localY)
+                        if (target in queueItems.indices && target != dragIndex) {
+                            val item = queueItems.removeAt(dragIndex)
+                            queueItems.add(target, item)
+                            dragIndex = target
+                            dragMoved = true
+                            queueAdapter.notifyDataSetChanged()
+                            list.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                        }
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        if (dragMoved) commitQueueOrder()
+                        dragIndex = -1
+                        dragMoved = false
+                        list.requestDisallowInterceptTouchEvent(false)
+                        true
+                    }
+                    else -> true
+                }
+            }
+            list = ListView(this).apply {
                 divider = ColorDrawable(Color.rgb(38, 38, 38)); dividerHeight = 1; selector = selectableBackground(); isVerticalScrollBarEnabled = false
-                adapter = TrackAdapter(queueItems); installArtworkScrollPolicy(this)
+                adapter = queueAdapter; installArtworkScrollPolicy(this)
                 setOnItemClickListener { _, _, position, _ ->
                     val track = queueItems[position]
                     val homeIndex = homeTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
@@ -1867,7 +1922,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
         super.onDestroy()
     }
 
-    private inner class TrackAdapter(private val items: List<Track>) : BaseAdapter() {
+    private inner class TrackAdapter(
+        private val items: List<Track>,
+        private val onDragTouch: ((Int, View, android.view.MotionEvent) -> Boolean)? = null
+    ) : BaseAdapter() {
         override fun getCount(): Int = items.size
         override fun getItem(position: Int): Track = items[position]
         override fun getItemId(position: Int): Long = getItem(position).id.hashCode().toUInt().toLong()
@@ -1904,6 +1962,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         addView(textLine(15f, Color.WHITE, true, Gravity.START).apply { id = android.R.id.text1 })
                         addView(textLine(12f, Color.rgb(155, 155, 155), false, Gravity.START).apply { id = android.R.id.text2 })
                     }, LinearLayout.LayoutParams(0, -1, 1f))
+                    if (onDragTouch != null) {
+                        addView(ImageView(this@MainActivity).apply {
+                            id = android.R.id.icon2
+                            setImageResource(R.drawable.ic_drag_handle)
+                            setColorFilter(Color.rgb(150, 150, 150))
+                            contentDescription = getString(R.string.reorder)
+                            setPadding(dp(10), dp(12), dp(6), dp(12))
+                            background = selectableBorderlessBackground()
+                        }, LinearLayout.LayoutParams(dp(44), -1))
+                    }
                 }, FrameLayout.LayoutParams(-1, -1))
             }
             val foreground = row.findViewById<View>(android.R.id.content)
@@ -1920,6 +1988,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 !track.localUri.isNullOrBlank() -> { action.text = getString(R.string.local_badge); action.setBackgroundColor(Color.rgb(72, 72, 72)) }
                 playback.isSessionCached(track) -> { action.text = getString(R.string.cached_badge); action.setBackgroundColor(Color.rgb(72, 110, 72)) }
                 else -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
+            }
+            row.findViewById<View?>(android.R.id.icon2)?.setOnTouchListener { handle, event ->
+                onDragTouch?.invoke(position, handle, event) == true
             }
             val art = row.findViewById<ImageView>(android.R.id.icon1)
             if (deferArtworkLoads) {
