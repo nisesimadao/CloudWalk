@@ -53,12 +53,11 @@ class CoverFlowView @JvmOverloads constructor(
     private val pageSpacing = 92f * density
     private val visualSpacing = 112f * density
     private val sideScale = 0.83f
-    private val maxAngle = 48f
+    private val maxAngle = 42f
     private val artworkTargetPx = min(320, (168f * density).toInt())
     private val previewArtworkTargetPx = min(96, artworkTargetPx)
     private var scrollOffset = 0f
     private var wasDragging = false
-    private var gestureStartIndex = 0
     private var flingHandled = false
     private var lastSelectionHapticAt = 0L
     private var lastPrefetchCenter = -99
@@ -106,7 +105,6 @@ class CoverFlowView @JvmOverloads constructor(
             removeCallbacks(promoteArtworkRunnable)
             wasDragging = false
             flingHandled = false
-            gestureStartIndex = selectedIndex
             if (!scroller.isFinished) scroller.abortAnimation()
             return true
         }
@@ -114,13 +112,15 @@ class CoverFlowView @JvmOverloads constructor(
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
             if (abs(distanceX) > abs(distanceY) * 0.72f) {
                 wasDragging = true
-                val gestureMin = max(minOffset(), (gestureStartIndex - 2) * pageSpacing)
-                val gestureMax = min(maxOffset(), (gestureStartIndex + 2) * pageSpacing)
+                // 0.82 keeps the rendered cover almost 1:1 with the finger because
+                // visualSpacing is wider than pageSpacing. Only resist at the real ends.
                 val proposed = scrollOffset + distanceX * 0.82f
-                val overscroll = pageSpacing * 0.22f
+                val min = minOffset()
+                val max = maxOffset()
+                val overscroll = pageSpacing * 0.28f
                 scrollOffset = when {
-                    proposed < gestureMin -> (gestureMin + (proposed - gestureMin) * 0.24f).coerceAtLeast(gestureMin - overscroll)
-                    proposed > gestureMax -> (gestureMax + (proposed - gestureMax) * 0.24f).coerceAtMost(gestureMax + overscroll)
+                    proposed < min -> (min + (proposed - min) * 0.26f).coerceAtLeast(min - overscroll)
+                    proposed > max -> (max + (proposed - max) * 0.26f).coerceAtMost(max + overscroll)
                     else -> proposed
                 }
                 updateSelectionFromOffset()
@@ -131,18 +131,25 @@ class CoverFlowView @JvmOverloads constructor(
 
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
             if (tracks.size < 2 || abs(velocityX) <= abs(velocityY)) return false
-            wasDragging = true
             flingHandled = true
-            val velocityDp = abs(velocityX) / density
-            val maxHops = if (resources.configuration.screenWidthDp <= 400) 2 else 3
-            val hops = when {
-                velocityDp >= 2200f -> maxHops
-                velocityDp >= 1150f -> min(2, maxHops)
-                else -> 1
-            }
+
+            // Project from where the cover actually is now, not where the gesture began.
+            // This avoids the old "drag two covers, flick, then jump backwards" behavior.
+            val currentPage = scrollOffset / pageSpacing
             val direction = if (velocityX < 0f) 1 else -1
-            val target = (gestureStartIndex + direction * hops).coerceIn(0, tracks.lastIndex)
-            settleToIndex(target, if (hops > 1) 210 else 165)
+            val velocityDp = velocityX / density
+            val maxMomentumPages = if (resources.configuration.screenWidthDp <= 400) 3f else 4f
+            val projectedMomentum = (-velocityDp / 1350f).coerceIn(-maxMomentumPages, maxMomentumPages)
+            val nearest = currentPage.roundToInt()
+            var target = (currentPage + projectedMomentum).roundToInt()
+            if (target == nearest && abs(velocityDp) >= 550f) target = nearest + direction
+            target = target.coerceIn(0, tracks.lastIndex)
+
+            // Momentum scrolling should not buzz once per intermediate cover.
+            wasDragging = false
+            val pages = abs(target - currentPage)
+            val duration = (150f + pages * 38f).roundToInt().coerceIn(150, 285)
+            settleToIndex(target, duration)
             return true
         }
 
@@ -163,6 +170,8 @@ class CoverFlowView @JvmOverloads constructor(
     })
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+        }
         detector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             if (!flingHandled && scroller.isFinished) snapToNearest()
@@ -233,9 +242,11 @@ class CoverFlowView @JvmOverloads constructor(
             scrollOffset = scroller.currX.toFloat().coerceIn(minOffset(), maxOffset())
             updateSelectionFromOffset()
             postInvalidateOnAnimation()
-        } else {
-            snapToNearest()
         }
+        // Do not call snapToNearest() here. computeScroll() is invoked while the view
+        // is otherwise idle too, including between MOVE events, which used to start a
+        // competing snap animation and pull the cover back under the user's finger.
+        // ACTION_UP/ACTION_CANCEL already own snapping when a drag actually ends.
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -466,19 +477,24 @@ class CoverFlowView @JvmOverloads constructor(
     fun setSelected(index: Int, animate: Boolean) {
         if (tracks.isEmpty()) return
         val safe = index.coerceIn(0, tracks.lastIndex)
-        selectedIndex = safe
+        val changed = selectedIndex != safe
         lastPrefetchHighQuality = false
-        prefetchVisible(highQuality = !animate)
         val target = safe * pageSpacing
         if (animate) {
-            wasDragging = true
+            wasDragging = false
+            flingHandled = false
             settleToIndex(safe, 170)
             removeCallbacks(promoteArtworkRunnable)
             postDelayed(promoteArtworkRunnable, 190L)
-        } else {
-            scrollOffset = target
-            invalidate()
+            // updateSelectionFromOffset() owns selection callbacks while moving.
+            return
         }
-        onSelectionChanged?.invoke(safe, tracks[safe])
+
+        if (!scroller.isFinished) scroller.abortAnimation()
+        selectedIndex = safe
+        scrollOffset = target
+        prefetchVisible(highQuality = true)
+        invalidate()
+        if (changed) onSelectionChanged?.invoke(safe, tracks[safe])
     }
 }
