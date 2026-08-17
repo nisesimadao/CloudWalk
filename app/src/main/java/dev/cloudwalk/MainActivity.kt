@@ -253,19 +253,23 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     .build()
             )
         }
-        val actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
-            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SEEK_TO or
-            PlaybackState.ACTION_SKIP_TO_NEXT or PlaybackState.ACTION_SKIP_TO_PREVIOUS or PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM
-        mediaSession.setPlaybackState(
-            PlaybackState.Builder()
-                .setActions(actions)
-                .setState(
-                    if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
-                    playback.currentPosition().toLong(),
-                    if (playing) 1f else 0f
-                )
-                .build()
-        )
+        val queue = currentQueueOrder()
+        val activeIndex = track?.let { current -> queue.indexOfFirst { it.id == current.id } } ?: -1
+        val canWrap = repeatMode == RepeatMode.ALL && queue.size > 1
+        var actions = PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE or
+            PlaybackState.ACTION_PLAY_PAUSE or PlaybackState.ACTION_SEEK_TO
+        if (queue.isNotEmpty()) actions = actions or PlaybackState.ACTION_SKIP_TO_QUEUE_ITEM
+        if (activeIndex > 0 || canWrap) actions = actions or PlaybackState.ACTION_SKIP_TO_PREVIOUS
+        if ((activeIndex >= 0 && activeIndex < queue.lastIndex) || canWrap) actions = actions or PlaybackState.ACTION_SKIP_TO_NEXT
+        val state = PlaybackState.Builder()
+            .setActions(actions)
+            .setState(
+                if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                playback.currentPosition().toLong(),
+                if (playing) 1f else 0f
+            )
+        if (activeIndex >= 0) state.setActiveQueueItemId(activeIndex.toLong())
+        mediaSession.setPlaybackState(state.build())
     }
 
     private fun syncMediaSessionAfterSeek() {
