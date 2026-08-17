@@ -10,6 +10,13 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.charset.StandardCharsets
 
+data class ResolvedPublicStream(
+    val url: String,
+    val protocol: String,
+    val licenseAuthToken: String? = null,
+    val applicationId: String
+)
+
 /** Public/unauthed SoundCloud web compatibility client. */
 class WebSoundCloudApi(context: Context) {
     private val prefs = context.getSharedPreferences("cloudwalk_web", Context.MODE_PRIVATE)
@@ -17,6 +24,10 @@ class WebSoundCloudApi(context: Context) {
     private val seedClientId = "UMY1dzQ68n2QbCuypNe8JOivmV2FO2Ep"
     private val clientIdLock = Any()
     @Volatile private var cachedClientId: String? = prefs.getString("client_id", null)?.takeIf { it.isNotBlank() }
+    private val applicationId: String = run {
+        val tail = System.currentTimeMillis().toString().takeLast(8).toLongOrNull() ?: 0L
+        (tail * 1000L + (Math.random() * 1000.0).toLong()).toString()
+    }
 
     fun searchTracks(query: String, limit: Int = 30, offset: Int = 0): List<Track> {
         val q = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
@@ -31,10 +42,31 @@ class WebSoundCloudApi(context: Context) {
         }
     }
 
-    fun resolvePublicStream(transcodingEndpoint: String): String {
-        val separator = if ('?' in transcodingEndpoint) '&' else '?'
-        val body = withClientId { id -> get("$transcodingEndpoint${separator}client_id=$id") }
-        return JSONObject(body).getString("url")
+    fun resolvePublicStream(transcodingEndpoint: String, permalinkUrl: String? = null): ResolvedPublicStream {
+        fun protocolOf(endpoint: String): String = when {
+            endpoint.contains("ctr-encrypted-hls", ignoreCase = true) -> "ctr-encrypted-hls"
+            endpoint.contains("cbc-encrypted-hls", ignoreCase = true) -> "cbc-encrypted-hls"
+            endpoint.contains("/hls", ignoreCase = true) -> "hls"
+            else -> "progressive"
+        }
+        fun resolve(endpoint: String): ResolvedPublicStream {
+            val separator = if ('?' in endpoint) '&' else '?'
+            val body = withClientId { id -> get("$endpoint${separator}client_id=$id") }
+            val json = JSONObject(body)
+            return ResolvedPublicStream(
+                url = json.getString("url"),
+                protocol = protocolOf(endpoint),
+                licenseAuthToken = json.optString("licenseAuthToken").ifBlank { null },
+                applicationId = applicationId
+            )
+        }
+        return try {
+            resolve(transcodingEndpoint)
+        } catch (error: HttpStatusException) {
+            if (error.code != 404 || permalinkUrl.isNullOrBlank()) throw error
+            val refreshed = resolveTrackUrl(permalinkUrl)?.streamUrl ?: throw error
+            resolve(refreshed)
+        }
     }
 
     fun resolvePublicUrl(inputUrl: String): SoundCloudResolvedUrl {
@@ -133,19 +165,39 @@ class WebSoundCloudApi(context: Context) {
     private fun parseTrack(item: JSONObject): Track? {
         if (item.optString("kind").let { it.isNotBlank() && it != "track" }) return null
         val transcodings = item.optJSONObject("media")?.optJSONArray("transcodings")
-        var progressive: String? = null
-        var hls: String? = null
+        var aacCtr160: String? = null
+        var aacCtr96: String? = null
+        var aacCbc160: String? = null
+        var aacCbc96: String? = null
+        var legacyHls: String? = null
+        var legacyProgressive: String? = null
         if (transcodings != null) {
             for (i in 0 until transcodings.length()) {
                 val t = transcodings.optJSONObject(i) ?: continue
                 val endpoint = t.optString("url").ifBlank { null } ?: continue
-                when (t.optJSONObject("format")?.optString("protocol")) {
-                    "progressive" -> if (progressive == null) progressive = endpoint
-                    "hls" -> if (hls == null) hls = endpoint
+                val format = t.optJSONObject("format")
+                val protocol = format?.optString("protocol")
+                val mime = format?.optString("mime_type").orEmpty()
+                val preset = t.optString("preset")
+                val isAac = mime.contains("audio/mp4", ignoreCase = true)
+                when {
+                    protocol == "ctr-encrypted-hls" && isAac && preset == "aac_160k" -> if (aacCtr160 == null) aacCtr160 = endpoint
+                    protocol == "ctr-encrypted-hls" && isAac && preset == "aac_96k" -> if (aacCtr96 == null) aacCtr96 = endpoint
+                    protocol == "cbc-encrypted-hls" && isAac && preset == "aac_160k" -> if (aacCbc160 == null) aacCbc160 = endpoint
+                    protocol == "cbc-encrypted-hls" && isAac && preset == "aac_96k" -> if (aacCbc96 == null) aacCbc96 = endpoint
+                    protocol == "hls" -> if (legacyHls == null) legacyHls = endpoint
+                    protocol == "progressive" -> if (legacyProgressive == null) legacyProgressive = endpoint
                 }
             }
         }
-        val stream = progressive ?: hls ?: return null
+        var stream = aacCtr160 ?: aacCtr96 ?: aacCbc160 ?: aacCbc96 ?: legacyHls ?: legacyProgressive ?: return null
+        item.optString("track_authorization").ifBlank { null }?.let { authorization ->
+            if (!stream.contains("track_authorization=")) {
+                val separator = if ('?' in stream) '&' else '?'
+                val encoded = URLEncoder.encode(authorization, StandardCharsets.UTF_8.name())
+                stream = "$stream${separator}track_authorization=$encoded"
+            }
+        }
         val user = item.optJSONObject("user")
         return Track(
             id = item.optString("urn").ifBlank { "soundcloud:tracks:${item.optLong("id")}" },
