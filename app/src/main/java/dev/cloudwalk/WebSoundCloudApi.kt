@@ -18,10 +18,11 @@ class WebSoundCloudApi(context: Context) {
     private val clientIdLock = Any()
     @Volatile private var cachedClientId: String? = prefs.getString("client_id", null)?.takeIf { it.isNotBlank() }
 
-    fun searchTracks(query: String, limit: Int = 30): List<Track> {
+    fun searchTracks(query: String, limit: Int = 30, offset: Int = 0): List<Track> {
         val q = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
+        val safeOffset = offset.coerceAtLeast(0)
         val body = withClientId { id ->
-            get("$base/search/tracks?q=$q&client_id=$id&limit=$limit&offset=0&linked_partitioning=1&app_locale=en")
+            get("$base/search/tracks?q=$q&client_id=$id&limit=$limit&offset=$safeOffset&linked_partitioning=1&app_locale=en")
         }
         val arr = JSONObject(body).optJSONArray("collection") ?: return emptyList()
         Log.d(TAG, "search collection=${arr.length()}")

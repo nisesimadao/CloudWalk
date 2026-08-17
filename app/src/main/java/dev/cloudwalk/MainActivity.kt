@@ -29,6 +29,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private val homeTracks = ArrayList<Track>()
     private val io = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
+    private val SEARCH_PAGE_SIZE = 30
+    private val MAX_SEARCH_RESULTS = 120
 
     private lateinit var api: SoundCloudApi
     private lateinit var webApi: WebSoundCloudApi
@@ -928,31 +930,84 @@ class MainActivity : Activity(), PlaybackController.Listener {
             visibility = View.GONE
         }
         screen.addView(searchStatus, LinearLayout.LayoutParams(-1, dp(32)))
+
+        val displayedItems = ArrayList<Track>()
+        val searchAdapter = TrackAdapter(displayedItems)
         val results = ListView(this).apply {
             divider = ColorDrawable(Color.rgb(40, 40, 40)); dividerHeight = 1; selector = selectableBackground(); isVerticalScrollBarEnabled = false
-            installArtworkScrollPolicy(this)
+            adapter = searchAdapter
         }
         screen.addView(results, LinearLayout.LayoutParams(-1, 0, 1f))
+
         fun showSearchStatus(message: String?) {
             searchStatus.text = message.orEmpty()
             searchStatus.visibility = if (message.isNullOrBlank()) View.GONE else View.VISIBLE
         }
         fun showResults(items: List<Track>) {
             showSearchStatus(null)
-            results.adapter = TrackAdapter(items)
-            installSwipeToCache(results, items)
-            results.setOnItemClickListener { _, _, position, _ ->
-                val track = items[position]
-                if (items.isNotEmpty()) updateHomeCollection(items, position)
-                play(track); showNowPlaying(track)
-            }
-            results.setOnItemLongClickListener { _, _, position, _ -> showTrackMenu(items[position]); true }
+            displayedItems.clear()
+            displayedItems.addAll(items)
+            searchAdapter.notifyDataSetChanged()
         }
+
+        results.setOnItemClickListener { _, _, position, _ ->
+            val track = displayedItems.getOrNull(position) ?: return@setOnItemClickListener
+            if (displayedItems.isNotEmpty()) updateHomeCollection(displayedItems, position)
+            play(track); showNowPlaying(track)
+        }
+        results.setOnItemLongClickListener { _, _, position, _ ->
+            displayedItems.getOrNull(position)?.let(::showTrackMenu)
+            true
+        }
+        installSwipeToCache(results, displayedItems)
         showResults(homeTracks)
+
         var pendingSearch: Runnable? = null
         var searchSerial = 0
         var searchInFlight = false
         var queuedSearch: String? = null
+        var activePublicQuery: String? = null
+        var canLoadMore = false
+        var loadMoreInFlight = false
+        var nextPublicOffset = SEARCH_PAGE_SIZE
+
+        fun loadMore() {
+            val q = activePublicQuery ?: return
+            if (overlay !== screen || loadMoreInFlight || searchInFlight || !canLoadMore || !isOnline()) return
+            if (displayedItems.size >= MAX_SEARCH_RESULTS || nextPublicOffset >= MAX_SEARCH_RESULTS) {
+                canLoadMore = false
+                return
+            }
+            val serial = searchSerial
+            val offset = nextPublicOffset
+            val limit = minOf(SEARCH_PAGE_SIZE, MAX_SEARCH_RESULTS - offset)
+            loadMoreInFlight = true
+            io.execute {
+                val attempt = runCatching { webApi.searchTracks(q, limit, offset) }
+                main.post {
+                    loadMoreInFlight = false
+                    if (overlay !== screen || serial != searchSerial || activePublicQuery != q) return@post
+                    attempt.onSuccess { page ->
+                        val before = displayedItems.size
+                        val existing = displayedItems.asSequence().map { it.id }.toHashSet()
+                        page.asSequence()
+                            .filter { existing.add(it.id) }
+                            .take(MAX_SEARCH_RESULTS - displayedItems.size)
+                            .forEach(displayedItems::add)
+                        nextPublicOffset = offset + limit
+                        val added = displayedItems.size - before
+                        if (added > 0) searchAdapter.notifyDataSetChanged()
+                        canLoadMore = page.size >= limit && added > 0 &&
+                            displayedItems.size < MAX_SEARCH_RESULTS && nextPublicOffset < MAX_SEARCH_RESULTS
+                    }.onFailure { canLoadMore = false }
+                }
+            }
+        }
+
+        installArtworkScrollPolicy(results) { first, visible, total ->
+            if (total > 0 && first + visible >= total - 4) loadMore()
+        }
+
         fun performSearch(q: String) {
             if (overlay !== screen) return
             val serial = ++searchSerial
@@ -961,20 +1016,27 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 return
             }
             if (!isOnline()) {
+                activePublicQuery = null
+                canLoadMore = false
                 showResults(emptyList())
                 showSearchStatus(getString(R.string.offline))
                 return
             }
             showSearchStatus(getString(R.string.searching))
+            activePublicQuery = null
+            canLoadMore = false
+            loadMoreInFlight = false
+            nextPublicOffset = SEARCH_PAGE_SIZE
             searchInFlight = true
             io.execute {
+                val publicPaged = !isSoundCloudUrl(q) && !hasAccount()
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
                         webApi.resolveTrackUrl(q)?.let(::listOf).orEmpty()
                     } else if (hasAccount()) {
-                        api.searchTracks(q, 30)
+                        api.searchTracks(q, SEARCH_PAGE_SIZE)
                     } else {
-                        webApi.searchTracks(q, 30)
+                        webApi.searchTracks(q, SEARCH_PAGE_SIZE, 0)
                     }
                 }
                 attempt.exceptionOrNull()?.let { Log.e("CloudWalkSearch", "Search failed", it) }
@@ -983,8 +1045,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     if (overlay === screen && serial == searchSerial) {
                         attempt.onSuccess { items ->
                             showResults(items)
-                            if (items.isEmpty()) showSearchStatus(getString(R.string.no_results))
+                            if (items.isEmpty()) {
+                                showSearchStatus(getString(R.string.no_results))
+                            } else if (publicPaged) {
+                                activePublicQuery = q
+                                nextPublicOffset = SEARCH_PAGE_SIZE
+                                canLoadMore = items.size >= SEARCH_PAGE_SIZE && nextPublicOffset < MAX_SEARCH_RESULTS
+                            }
                         }.onFailure {
+                            activePublicQuery = null
+                            canLoadMore = false
                             showResults(emptyList())
                             showSearchStatus(getString(R.string.search_failed))
                         }
@@ -1002,6 +1072,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 if (q.length < 2) {
                     searchSerial++
                     queuedSearch = null
+                    activePublicQuery = null
+                    canLoadMore = false
+                    nextPublicOffset = SEARCH_PAGE_SIZE
                     showResults(if (q.isEmpty()) homeTracks else emptyList())
                 } else {
                     pendingSearch = Runnable {
@@ -2012,15 +2085,21 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
     }
 
-    private fun installArtworkScrollPolicy(list: ListView) {
+    private fun installArtworkScrollPolicy(
+        list: ListView,
+        onScroll: ((firstVisibleItem: Int, visibleItemCount: Int, totalItemCount: Int) -> Unit)? = null
+    ) {
         list.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
                 val shouldDefer = scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE
-                if (deferArtworkLoads == shouldDefer) return
-                deferArtworkLoads = shouldDefer
-                if (!shouldDefer) (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
+                if (deferArtworkLoads != shouldDefer) {
+                    deferArtworkLoads = shouldDefer
+                    if (!shouldDefer) (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
+                }
             }
-            override fun onScroll(view: AbsListView?, firstVisibleItem: Int, visibleItemCount: Int, totalItemCount: Int) = Unit
+            override fun onScroll(view: AbsListView?, firstVisibleItem: Int, visibleItemCount: Int, totalItemCount: Int) {
+                onScroll?.invoke(firstVisibleItem, visibleItemCount, totalItemCount)
+            }
         })
     }
 
