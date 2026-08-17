@@ -53,6 +53,7 @@ class CoverFlowView @JvmOverloads constructor(
     private var lastPrefetchCenter = -99
     private var lastPrefetchHighQuality = false
     private var windowActive = false
+    private var surfaceActive = true
     private val promoteArtworkRunnable = object : Runnable {
         override fun run() {
             if (!scroller.isFinished) {
@@ -178,6 +179,23 @@ class CoverFlowView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
+    fun setSurfaceActive(active: Boolean) {
+        if (surfaceActive == active) return
+        surfaceActive = active
+        if (!active) {
+            removeCallbacks(promoteArtworkRunnable)
+            if (!scroller.isFinished) scroller.abortAnimation()
+            wasDragging = false
+            return
+        }
+        if (windowActive) {
+            lastPrefetchCenter = -99
+            lastPrefetchHighQuality = false
+            prefetchVisible(highQuality = true)
+            invalidate()
+        }
+    }
+
     override fun computeScroll() {
         if (scroller.computeScrollOffset()) {
             scrollOffset = scroller.currX.toFloat().coerceIn(minOffset(), maxOffset())
@@ -284,7 +302,7 @@ class CoverFlowView @JvmOverloads constructor(
     }
 
     private fun prefetchVisible(highQuality: Boolean = !wasDragging && scroller.isFinished) {
-        if (!windowActive || tracks.isEmpty()) return
+        if (!surfaceActive || !windowActive || tracks.isEmpty()) return
         val cache = artworkCache ?: return
         val center = selectedIndex.coerceIn(0, tracks.lastIndex)
         if (center == lastPrefetchCenter && (!highQuality || lastPrefetchHighQuality)) return

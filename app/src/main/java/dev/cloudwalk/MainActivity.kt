@@ -1124,6 +1124,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun refreshNowPlaying(track: Track) {
+        if (overlay !== nowPlayingScreen) return
         nowPlayingTitle?.text = track.title
         nowPlayingArtist?.text = track.artist
         nowPlayingArtwork?.let { artwork.load(track.artworkUrl, it, dp(if (resources.configuration.screenHeightDp <= 700) 180 else 270)) }
@@ -1164,10 +1165,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         flowView.tracks = homeTracks
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
         flowView.setSelected(selectedIndex.coerceIn(0, homeTracks.lastIndex), false)
-        homeEmptyView.visibility = View.GONE
-        trackInfoPanel.visibility = View.VISIBLE
-        playerStripView.visibility = View.VISIBLE
-        setViewMode(showingFlow)
+        syncHomeSurfaceVisibility()
         rebuildShuffleOrder(selectedTrack?.id)
         updateMediaSessionQueue()
     }
@@ -1351,12 +1349,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         overlay = view
         attachOverlay(view)
+        syncHomeSurfaceVisibility()
     }
 
     private fun replaceOverlay(view: View) {
         overlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
         overlay = view
         attachOverlay(view)
+        syncHomeSurfaceVisibility()
     }
 
     private fun attachOverlay(view: View) {
@@ -1370,6 +1370,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         addContentView(view, ViewGroup.LayoutParams(-1, -1))
         view.requestApplyInsets()
+        if (view === nowPlayingScreen) selectedTrack?.let(::refreshNowPlaying)
     }
 
     private fun systemBarInsets(insets: android.view.WindowInsets): IntArray {
@@ -1391,6 +1392,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             overlay = previous
             attachOverlay(previous)
         }
+        syncHomeSurfaceVisibility()
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
@@ -1608,6 +1610,24 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
     }
 
+    private fun syncHomeSurfaceVisibility() {
+        if (!::contentHost.isInitialized) return
+        val showHome = overlay == null
+        contentHost.visibility = if (showHome) View.VISIBLE else View.GONE
+        if (!showHome) {
+            if (::flowView.isInitialized) flowView.setSurfaceActive(false)
+            if (::trackInfoPanel.isInitialized) trackInfoPanel.visibility = View.GONE
+            if (::playerStripView.isInitialized) playerStripView.visibility = View.GONE
+            return
+        }
+        setViewMode(showingFlow)
+        if (homeTracks.isNotEmpty()) {
+            trackInfoPanel.visibility = View.VISIBLE
+            playerStripView.visibility = View.VISIBLE
+            selectedTrack?.let(::refreshHomeTrackUi)
+        }
+    }
+
     private fun setViewMode(flow: Boolean) {
         showingFlow = flow && !lowPowerMode
         if (homeTracks.isEmpty()) {
@@ -1616,11 +1636,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
             homeEmptyView.visibility = View.VISIBLE
             trackInfoPanel.visibility = View.GONE
             playerStripView.visibility = View.GONE
+            flowView.setSurfaceActive(false)
             return
         }
         homeEmptyView.visibility = View.GONE
         flowView.visibility = if (showingFlow) View.VISIBLE else View.GONE
         listView.visibility = if (showingFlow) View.GONE else View.VISIBLE
+        flowView.setSurfaceActive(overlay == null && showingFlow)
     }
 
     private fun play(track: Track) {
@@ -1632,22 +1654,28 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun showTrack(track: Track) {
         val changed = selectedTrack?.id != track.id
         selectedTrack = track
-        if (::trackInfoPanel.isInitialized) trackInfoPanel.visibility = View.VISIBLE
-        if (::playerStripView.isInitialized) playerStripView.visibility = View.VISIBLE
+        if (overlay == null) refreshHomeTrackUi(track)
+        if (changed) updateMediaSession()
+    }
+
+    private fun refreshHomeTrackUi(track: Track) {
+        if (!::titleView.isInitialized) return
+        trackInfoPanel.visibility = View.VISIBLE
+        playerStripView.visibility = View.VISIBLE
         titleView.text = track.title
         artistView.text = track.artist
         miniTitleView.text = track.title
         miniArtistView.text = track.artist
         artwork.load(track.artworkUrl, miniArtwork, dp(48))
-        if (changed) {
-            (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
-            updateMediaSession()
-        }
+        playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
+        val duration = playback.duration()
+        progress.progress = if (duration > 0) (playback.currentPosition() * 1000L / duration).toInt() else 0
     }
 
     private fun updatePlayButton() {
-        if (::playButton.isInitialized) playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
-        selectedTrack?.let { refreshNowPlaying(it) }
+        if (overlay == null && ::playButton.isInitialized) playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        if (overlay === nowPlayingScreen) selectedTrack?.let { refreshNowPlaying(it) }
     }
 
     private fun startProgressTicker() {
@@ -1657,11 +1685,15 @@ class MainActivity : Activity(), PlaybackController.Listener {
             override fun run() {
                 if (!playing) return
                 val duration = playback.duration()
-                val newProgress = if (duration > 0) (playback.currentPosition() * 1000L / duration).toInt() else 0
-                if (progress.progress != newProgress) progress.progress = newProgress
-                if (nowPlayingSeek?.progress != newProgress) nowPlayingSeek?.progress = newProgress
-                nowPlayingElapsed?.text = formatTime(playback.currentPosition())
-                if (nowPlayingDuration?.text.isNullOrEmpty()) nowPlayingDuration?.text = formatTime(duration)
+                val position = playback.currentPosition()
+                val newProgress = if (duration > 0) (position * 1000L / duration).toInt() else 0
+                if (overlay == null) {
+                    if (progress.progress != newProgress) progress.progress = newProgress
+                } else if (overlay === nowPlayingScreen) {
+                    if (nowPlayingSeek?.progress != newProgress) nowPlayingSeek?.progress = newProgress
+                    nowPlayingElapsed?.text = formatTime(position)
+                    if (nowPlayingDuration?.text.isNullOrEmpty()) nowPlayingDuration?.text = formatTime(duration)
+                }
                 main.postDelayed(this, if (lowPowerMode) 1500 else 750)
             }
         }.also(main::post)
