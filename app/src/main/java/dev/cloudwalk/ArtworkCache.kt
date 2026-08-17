@@ -230,9 +230,9 @@ class ArtworkCache(context: Context) {
     @Suppress("DEPRECATION")
     fun trimMemory(level: Int) {
         when {
+            level == android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> memory.trimToSize(3 * 1024 * 1024)
             level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> memory.evictAll()
             level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> memory.trimToSize(2 * 1024 * 1024)
-            level >= android.content.ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> memory.trimToSize(3 * 1024 * 1024)
         }
     }
 

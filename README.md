@@ -29,7 +29,7 @@ CloudWalk is a **tiny native Android SoundCloud client** built for fast startup,
 - Cover Flow queue browser and native Now Playing UI
 - Queue, reorder, shuffle and repeat
 - Background playback with MediaSession controls
-- Temporary session cache for offline playback
+- Temporary session cache to avoid re-downloading media during the current app session
 - Local audio files in the same player
 - English / Japanese UI
 - Android 8.0 (API 26) and newer
@@ -77,4 +77,4 @@ Release builds use R8/resource shrinking:
 
 CloudWalk is experimental and is **not an official SoundCloud app**. Public-track search/playback currently follows SoundCloud's public web client behavior, so SoundCloud-side changes can temporarily break it.
 
-The session cache is temporary and is cleared when CloudWalk closes.
+The session cache is temporary and is cleared when CloudWalk closes. SoundCloud protected streams can still require a network connection to acquire a playback license, even when their media segments are cached.

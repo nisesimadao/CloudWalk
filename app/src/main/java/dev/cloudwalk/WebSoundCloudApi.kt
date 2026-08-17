@@ -70,7 +70,8 @@ class WebSoundCloudApi(context: Context) {
     }
 
     fun resolvePublicUrl(inputUrl: String): SoundCloudResolvedUrl {
-        val soundCloudUrl = if (isShortUrl(inputUrl)) resolveRedirect(inputUrl) else inputUrl
+        val normalized = inputUrl.trim().replaceFirst(Regex("^http://", RegexOption.IGNORE_CASE), "https://")
+        val soundCloudUrl = if (isShortUrl(normalized)) resolveRedirect(normalized) else normalized
         val encoded = URLEncoder.encode(soundCloudUrl, StandardCharsets.UTF_8.name())
         val body = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
         val item = JSONObject(body)
@@ -95,40 +96,22 @@ class WebSoundCloudApi(context: Context) {
     fun resolveProfileUrl(inputUrl: String): SoundCloudPublicProfile? = resolvePublicUrl(inputUrl).profile
 
     fun profileLikes(profile: SoundCloudPublicProfile, limit: Int = 300): List<Track> {
-        val out = ArrayList<Track>(minOf(limit, 300))
-        val seen = HashSet<String>()
-        var offset = 0
         val safeLimit = limit.coerceIn(1, 300)
-        while (out.size < safeLimit) {
-            val pageLimit = minOf(100, safeLimit - out.size)
-            val body = withClientId { id ->
-                get("$base/users/${profile.id}/likes?client_id=$id&limit=$pageLimit&offset=$offset&linked_partitioning=1")
-            }
-            val arr = JSONObject(body).optJSONArray("collection") ?: break
-            for (i in 0 until arr.length()) {
-                val entry = arr.optJSONObject(i) ?: continue
-                val item = entry.optJSONObject("track") ?: if (entry.optString("kind") == "track") entry else null
-                val track = item?.let(::parseTrack) ?: continue
-                if (seen.add(track.id)) {
-                    out += track
-                    if (out.size >= safeLimit) break
-                }
-            }
-            offset += pageLimit
-            if (arr.length() < pageLimit) break
+        val pageLimit = minOf(100, safeLimit)
+        return pagedTracks(
+            "$base/users/${profile.id}/likes?limit=$pageLimit&linked_partitioning=1",
+            safeLimit
+        ) { entry ->
+            entry.optJSONObject("track") ?: if (entry.optString("kind") == "track") entry else null
         }
-        return out
     }
 
     fun profileTracks(profile: SoundCloudPublicProfile, limit: Int = 120): List<Track> {
         val safeLimit = limit.coerceIn(1, 120)
-        val body = withClientId { id ->
-            get("$base/users/${profile.id}/tracks?client_id=$id&limit=$safeLimit&offset=0&linked_partitioning=1")
-        }
-        val arr = JSONObject(body).optJSONArray("collection") ?: return emptyList()
-        return buildList(arr.length()) {
-            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(::parseTrack)?.let(::add)
-        }
+        return pagedTracks(
+            "$base/users/${profile.id}/tracks?limit=$safeLimit&linked_partitioning=1",
+            safeLimit
+        )
     }
 
     fun artistTracks(track: Track, limit: Int = 30): List<Track> {
@@ -208,6 +191,43 @@ class WebSoundCloudApi(context: Context) {
             permalinkUrl = item.optString("permalink_url").ifBlank { null },
             streamUrl = stream
         )
+    }
+
+    private fun pagedTracks(
+        initialUrl: String,
+        limit: Int,
+        unwrap: (JSONObject) -> JSONObject? = { it }
+    ): List<Track> {
+        val out = ArrayList<Track>(limit)
+        val seenTracks = HashSet<String>()
+        val seenPages = HashSet<String>()
+        var nextUrl: String? = initialUrl
+        while (nextUrl != null && out.size < limit) {
+            val pageUrl = nextUrl
+            if (!seenPages.add(pageUrl)) break
+            val body = withClientId { id -> get(urlWithClientId(pageUrl, id)) }
+            val root = JSONObject(body)
+            val arr = root.optJSONArray("collection") ?: break
+            for (i in 0 until arr.length()) {
+                val entry = arr.optJSONObject(i) ?: continue
+                val track = unwrap(entry)?.let(::parseTrack) ?: continue
+                if (seenTracks.add(track.id)) {
+                    out += track
+                    if (out.size >= limit) break
+                }
+            }
+            nextUrl = root.optString("next_href").ifBlank { null }
+        }
+        return out
+    }
+
+    private fun urlWithClientId(url: String, id: String): String {
+        val existing = Regex("([?&])client_id=[^&]*")
+        if (existing.containsMatchIn(url)) {
+            return existing.replace(url) { match -> "${match.groupValues[1]}client_id=$id" }
+        }
+        val separator = if ('?' in url) '&' else '?'
+        return "$url${separator}client_id=$id"
     }
 
     private fun withClientId(block: (String) -> String): String {

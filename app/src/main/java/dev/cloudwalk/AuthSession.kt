@@ -17,7 +17,13 @@ class AuthSession(
         refreshLocked() ?: token
     }
 
-    fun hasAccount(): Boolean = !prefs.getString("access_token", null).isNullOrBlank()
+    fun hasAccount(): Boolean = synchronized(lock) {
+        val token = prefs.getString("access_token", null)?.takeIf { it.isNotBlank() } ?: return@synchronized false
+        val expiresAt = prefs.getLong("expires_at", 0L)
+        if (expiresAt == 0L || expiresAt > System.currentTimeMillis()) return@synchronized true
+        val refresh = prefs.getString("refresh_token", null)?.takeIf { it.isNotBlank() }
+        broker.configured && refresh != null
+    }
 
     fun save(tokens: BrokerTokens) = synchronized(lock) {
         prefs.edit()

@@ -1,6 +1,7 @@
 package dev.cloudwalk
 
 import android.app.Activity
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
@@ -23,6 +24,8 @@ import android.view.inputmethod.EditorInfo
 import android.widget.*
 import java.util.concurrent.Executors
 import java.util.ArrayDeque
+import java.util.Locale
+import java.lang.reflect.Proxy
 
 class MainActivity : Activity(), PlaybackController.Listener {
 
@@ -31,6 +34,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val SEARCH_PAGE_SIZE = 30
     private val MAX_SEARCH_RESULTS = 120
+    private val MAX_HOME_QUEUE = 120
 
     private lateinit var api: SoundCloudApi
     private lateinit var webApi: WebSoundCloudApi
@@ -75,6 +79,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private val overlayStack = ArrayDeque<View>()
     private var lastBackHandledAt = 0L
     private var overlayTransitionRunning = false
+    private var predictiveBackCallback: Any? = null
+    private var predictiveBackDispatcher: Any? = null
     private var lastNowPlayingTrackId: String? = null
     private val overlayBasePadding = java.util.WeakHashMap<View, IntArray>()
     private var deferArtworkLoads = false
@@ -93,6 +99,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var nowPlayingShuffle: ImageButton? = null
     private var nowPlayingRepeat: ImageButton? = null
     private var tabMiniRefresh: (() -> Unit)? = null
+    private var likesRefresh: (() -> Unit)? = null
+    private var libraryRefresh: (() -> Unit)? = null
+    private var recentRefresh: (() -> Unit)? = null
     private val cachingTrackIds = HashSet<String>()
     private var currentTopTab = 0
     private var shuffleEnabled = false
@@ -101,6 +110,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private val shuffledTrackIds = ArrayList<String>()
 
     private val REQUEST_LOCAL_AUDIO = 4201
+    private val PAUSED_PLAYBACK_SERVICE_GRACE_MS = 5L * 60_000L
+    private val RECENT_SCREEN_TAG = "cloudwalk_recent"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,11 +144,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         setContentView(buildUi())
         flowView.lowPowerMode = lowPowerMode
         setViewMode(showingFlow)
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            onBackInvokedDispatcher.registerOnBackInvokedCallback(
-                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
-            ) { handleBackAction() }
-        }
+        registerPredictiveBackCompat()
         if (homeTracks.isNotEmpty()) {
             val lastId = uiPrefs.getString("last_track_id", null)
             val initialIndex = homeTracks.indexOfFirst { it.id == lastId }.takeIf { it >= 0 } ?: 0
@@ -157,6 +164,54 @@ class MainActivity : Activity(), PlaybackController.Listener {
         setIntent(intent)
         handleAuthIntent(intent)
         handleSharedText(intent)
+    }
+
+
+    /**
+     * Keep API 33 back classes out of the verifier-visible MainActivity bytecode on old devices.
+     * A Kotlin SAM lambda for OnBackInvokedCallback is otherwise synthesized into a class that
+     * Android 8/9 may try to verify, producing NoClassDefFoundError noise even behind an SDK check.
+     */
+    private fun registerPredictiveBackCompat() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        runCatching {
+            val callbackClass = Class.forName("android.window.OnBackInvokedCallback")
+            val dispatcherClass = Class.forName("android.window.OnBackInvokedDispatcher")
+            val dispatcher = Activity::class.java.getMethod("getOnBackInvokedDispatcher").invoke(this)
+            val callback = Proxy.newProxyInstance(
+                javaClass.classLoader,
+                arrayOf(callbackClass)
+            ) { proxy, method, args ->
+                when (method.name) {
+                    "onBackInvoked" -> { handleBackAction(); null }
+                    "hashCode" -> System.identityHashCode(proxy)
+                    "equals" -> proxy === args?.firstOrNull()
+                    "toString" -> "CloudWalkOnBackInvokedCallback"
+                    else -> null
+                }
+            }
+            dispatcherClass.getMethod(
+                "registerOnBackInvokedCallback",
+                Int::class.javaPrimitiveType,
+                callbackClass
+            ).invoke(dispatcher, 0, callback)
+            predictiveBackDispatcher = dispatcher
+            predictiveBackCallback = callback
+        }.onFailure { Log.w("CloudWalkBack", "Predictive back registration failed", it) }
+    }
+
+    private fun unregisterPredictiveBackCompat() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        val dispatcher = predictiveBackDispatcher ?: return
+        val callback = predictiveBackCallback ?: return
+        runCatching {
+            val callbackClass = Class.forName("android.window.OnBackInvokedCallback")
+            Class.forName("android.window.OnBackInvokedDispatcher")
+                .getMethod("unregisterOnBackInvokedCallback", callbackClass)
+                .invoke(dispatcher, callback)
+        }
+        predictiveBackDispatcher = null
+        predictiveBackCallback = null
     }
 
     private fun handleBackAction() {
@@ -183,17 +238,19 @@ class MainActivity : Activity(), PlaybackController.Listener {
             capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
-    private fun isSoundCloudUrl(text: String): Boolean =
-        text.startsWith("https://soundcloud.com/", ignoreCase = true) ||
-            text.startsWith("http://soundcloud.com/", ignoreCase = true) ||
-            text.startsWith("https://www.soundcloud.com/", ignoreCase = true) ||
-            text.startsWith("https://on.soundcloud.com/", ignoreCase = true)
+    private fun isSoundCloudUrl(text: String): Boolean = runCatching {
+        val uri = java.net.URI(text.trim())
+        val scheme = uri.scheme?.lowercase(Locale.US)
+        val host = uri.host?.lowercase(Locale.US) ?: return@runCatching false
+        (scheme == "https" || scheme == "http") &&
+            (host == "soundcloud.com" || host.endsWith(".soundcloud.com"))
+    }.getOrDefault(false)
 
     private fun handleSharedText(incoming: Intent?) {
         if (incoming?.action != Intent.ACTION_SEND || incoming.type != "text/plain") return
         val text = incoming.getStringExtra(Intent.EXTRA_TEXT).orEmpty()
         incoming.removeExtra(Intent.EXTRA_TEXT)
-        val url = Regex("""https?://(?:(?:www\.)?soundcloud\.com|on\.soundcloud\.com)/[^\s]+""", RegexOption.IGNORE_CASE)
+        val url = Regex("""https?://(?:[A-Za-z0-9-]+\.)*soundcloud\.com/[^\s]+""", RegexOption.IGNORE_CASE)
             .find(text)?.value?.trimEnd('.', ',', ')', ']', '}') ?: return
         if (!isOnline()) { toast(getString(R.string.offline)); return }
         io.execute {
@@ -276,6 +333,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 index.toLong()
             )
         })
+        // Queue mutations can move the current item without changing the track itself.
+        // Keep activeQueueItemId and next/previous actions aligned with the new order.
+        updateMediaSession()
     }
 
     private fun updateMediaSession() {
@@ -321,7 +381,20 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun syncMediaSessionAfterSeek() {
-        main.postDelayed({ updateMediaSession() }, 120L)
+        main.postDelayed({
+            syncPlaybackPositionUi()
+            updateMediaSession()
+        }, 120L)
+    }
+
+    private fun syncPlaybackPositionUi() {
+        val duration = playback.duration()
+        val position = playback.currentPosition()
+        val newProgress = if (duration > 0) (position * 1000L / duration).toInt().coerceIn(0, 1000) else 0
+        if (::progress.isInitialized) progress.progress = newProgress
+        nowPlayingSeek?.progress = newProgress
+        nowPlayingElapsed?.text = formatTime(position)
+        if (duration > 0) nowPlayingDuration?.text = formatTime(duration)
     }
 
     private fun buildUi(): View {
@@ -588,6 +661,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun installPressMotion(view: View, pressedScale: Float = 0.92f) {
         view.setOnTouchListener { target, event ->
             if (lowPowerMode || !target.isEnabled) return@setOnTouchListener false
@@ -732,6 +806,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
         currentTopTab = 0
         deferArtworkLoads = false
         tabMiniRefresh = null
+        likesRefresh = null
+        libraryRefresh = null
+        recentRefresh = null
         syncHomeSurfaceVisibility()
         if (current != null) {
             if (lowPowerMode) {
@@ -768,29 +845,52 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
-        if (items.isEmpty()) {
-            screen.addView(TextView(this).apply {
-                text = emptyMessage
-                textSize = 14f
-                setTextColor(Color.rgb(155, 155, 155))
-                gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(-1, 0, 1f))
-        } else {
-            val list = ListView(this).apply {
-                divider = ColorDrawable(Color.rgb(38, 38, 38)); dividerHeight = 1
-                selector = selectableBackground(); isVerticalScrollBarEnabled = false
-                adapter = TrackAdapter(items)
-                installArtworkScrollPolicy(this)
-                installSwipeToCache(this, items)
-                setOnItemClickListener { _, _, position, _ ->
-                    updateHomeCollection(items, position)
-                    play(items[position])
-                    showNowPlaying(items[position])
-                }
-                setOnItemLongClickListener { _, _, position, _ -> showTrackMenu(items[position]); true }
+
+        val displayedItems = ArrayList(items)
+        val content = FrameLayout(this)
+        val adapter = TrackAdapter(displayedItems)
+        val list = ListView(this).apply {
+            divider = ColorDrawable(Color.rgb(38, 38, 38)); dividerHeight = 1
+            selector = selectableBackground(); isVerticalScrollBarEnabled = false
+            this.adapter = adapter
+            installArtworkScrollPolicy(this)
+            installSwipeToCache(this, displayedItems)
+            setOnItemClickListener { _, _, position, _ ->
+                val track = displayedItems.getOrNull(position) ?: return@setOnItemClickListener
+                updateHomeCollection(displayedItems, position)
+                play(track)
+                showNowPlaying(track)
             }
-            screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
+            setOnItemLongClickListener { _, _, position, _ ->
+                displayedItems.getOrNull(position)?.let(::showTrackMenu)
+                true
+            }
         }
+        val empty = TextView(this).apply {
+            text = emptyMessage
+            textSize = 14f
+            setTextColor(Color.rgb(155, 155, 155))
+            gravity = Gravity.CENTER
+        }
+        content.addView(list, FrameLayout.LayoutParams(-1, -1))
+        content.addView(empty, FrameLayout.LayoutParams(-1, -1))
+        screen.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        fun refreshItems(newItems: List<Track>) {
+            displayedItems.clear()
+            displayedItems.addAll(newItems)
+            adapter.notifyDataSetChanged()
+            val hasItems = displayedItems.isNotEmpty()
+            list.visibility = if (hasItems) View.VISIBLE else View.GONE
+            empty.visibility = if (hasItems) View.GONE else View.VISIBLE
+        }
+        refreshItems(items)
+        if (topLevelTab == 2) likesRefresh = { refreshItems(collections.likes()) }
+        if (topLevelTab == null && title == getString(R.string.recently_played)) {
+            screen.tag = RECENT_SCREEN_TAG
+            recentRefresh = { refreshItems(collections.recent()) }
+        }
+
         if (topLevelTab != null) {
             screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
             screen.addView(buildBottomNav(topLevelTab), LinearLayout.LayoutParams(-1, dp(64)))
@@ -880,37 +980,36 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }, LinearLayout.LayoutParams(-1, dp(34)))
         }
 
-        fun addRow(label: String, enabled: Boolean = true, action: () -> Unit) {
-            body.addView(TextView(this).apply {
-                text = label
-                textSize = 17f
-                setTextColor(if (enabled) Color.rgb(238,238,238) else Color.rgb(112,112,112))
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(20), 0, dp(20), 0)
-                background = if (enabled) selectableBackground() else null
-                isEnabled = enabled
-                isClickable = enabled
-                isFocusable = enabled
-                if (enabled) setOnClickListener { action() }
-            }, LinearLayout.LayoutParams(-1, dp(56)))
-            body.addView(View(this).apply { setBackgroundColor(Color.rgb(35,35,35)) }, LinearLayout.LayoutParams(-1, 1))
+        fun setRowEnabled(row: TextView, enabled: Boolean) {
+            row.isEnabled = enabled
+            row.isClickable = enabled
+            row.isFocusable = enabled
+            row.setTextColor(if (enabled) Color.rgb(238,238,238) else Color.rgb(112,112,112))
+            row.background = if (enabled) selectableBackground() else null
         }
 
-        val local = localLibrary.all()
-        val albumCount = local.map { it.album?.takeIf(String::isNotBlank) ?: getString(R.string.unknown_album) }.distinct().size
-        val artistCount = local.map { it.artist.ifBlank { getString(R.string.unknown_artist) } }.distinct().size
-        val recentCount = collections.recent().size
-        val cacheMb = sessionCache.currentBytes().toDouble() / (1024.0 * 1024.0)
-        val cachedLabel = if (cacheMb < 0.05) getString(R.string.cached_empty) else getString(R.string.cached_size, "%.1f".format(cacheMb))
+        fun addRow(label: String, enabled: Boolean = true, action: () -> Unit): TextView {
+            val row = TextView(this).apply {
+                text = label
+                textSize = 17f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), 0, dp(20), 0)
+                setOnClickListener { if (isEnabled) action() }
+            }
+            setRowEnabled(row, enabled)
+            body.addView(row, LinearLayout.LayoutParams(-1, dp(56)))
+            body.addView(View(this).apply { setBackgroundColor(Color.rgb(35,35,35)) }, LinearLayout.LayoutParams(-1, 1))
+            return row
+        }
 
         addSection(getString(R.string.library_on_device))
-        addRow(getString(R.string.songs_count, local.size)) { showLocalFiles() }
-        addRow(getString(R.string.albums_count, albumCount), local.isNotEmpty()) { showLocalGroups(true) }
-        addRow(getString(R.string.artists_count, artistCount), local.isNotEmpty()) { showLocalGroups(false) }
+        val songsRow = addRow("") { showLocalFiles() }
+        val albumsRow = addRow("", false) { showLocalGroups(true) }
+        val artistsRow = addRow("", false) { showLocalGroups(false) }
 
         addSection(getString(R.string.library_cloudwalk))
-        addRow(cachedLabel) { showCachedTracks() }
-        addRow(getString(R.string.recent_count, recentCount), recentCount > 0) {
+        val cachedRow = addRow("") { showCachedTracks() }
+        val recentRow = addRow("", false) {
             showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
         }
 
@@ -923,6 +1022,24 @@ class MainActivity : Activity(), PlaybackController.Listener {
             addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
         }
 
+        val refresh = {
+            val local = localLibrary.all()
+            val albumCount = local.map { it.album?.takeIf(String::isNotBlank) ?: getString(R.string.unknown_album) }.distinct().size
+            val artistCount = local.map { it.artist.ifBlank { getString(R.string.unknown_artist) } }.distinct().size
+            val recentCount = collections.recent().size
+            val cacheMb = sessionCache.currentBytes().toDouble() / (1024.0 * 1024.0)
+            songsRow.text = getString(R.string.songs_count, local.size)
+            albumsRow.text = getString(R.string.albums_count, albumCount)
+            artistsRow.text = getString(R.string.artists_count, artistCount)
+            cachedRow.text = if (cacheMb < 0.05) getString(R.string.cached_empty) else getString(R.string.cached_size, "%.1f".format(cacheMb))
+            recentRow.text = getString(R.string.recent_count, recentCount)
+            setRowEnabled(albumsRow, local.isNotEmpty())
+            setRowEnabled(artistsRow, local.isNotEmpty())
+            setRowEnabled(recentRow, recentCount > 0)
+        }
+        libraryRefresh = refresh
+        refresh()
+
         scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
         screen.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
@@ -933,6 +1050,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun showLocalFiles() {
         showOverlay(buildLocalFilesScreen())
+    }
+
+    private fun refreshLocalFiles() {
+        replaceOverlay(buildLocalFilesScreen())
     }
 
     private fun buildLocalFilesScreen(): View {
@@ -971,7 +1092,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         .setTitle(local[position].title)
                         .setItems(arrayOf(getString(R.string.remove_from_library))) { _, _ ->
                             localLibrary.remove(local[position])
-                            showLocalFiles()
+                            libraryRefresh?.invoke()
+                            refreshLocalFiles()
                         }
                         .show()
                     true
@@ -1014,8 +1136,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
             val added = localLibrary.addAll(readable)
             main.post {
                 if (isDestroyed) return@post
-                toast(resources.getQuantityString(R.plurals.added_tracks, added, added))
-                showLocalFiles()
+                toast(if (added > 0) resources.getQuantityString(R.plurals.added_tracks, added, added) else getString(R.string.no_new_local_tracks))
+                libraryRefresh?.invoke()
+                refreshLocalFiles()
             }
         }
     }
@@ -1088,7 +1211,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setOnMenuItemClickListener { item ->
                 when (item.title.toString()) {
                     getString(R.string.cache_size) -> { showCacheSizeDialog(); true }
-                    getString(R.string.clear_all) -> { sessionCache.clear(); replaceOverlay(buildCachedTracksScreen()); true }
+                    getString(R.string.clear_all) -> { sessionCache.clear(); libraryRefresh?.invoke(); replaceOverlay(buildCachedTracksScreen()); true }
                     else -> false
                 }
             }
@@ -1125,6 +1248,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         .setTitle(track.title)
                         .setItems(arrayOf(getString(R.string.remove_session_cache))) { _, _ ->
                             sessionCache.remove(track)
+                            libraryRefresh?.invoke()
                             replaceOverlay(buildCachedTracksScreen())
                         }
                         .show()
@@ -1153,7 +1277,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 if (overlay !== screen) return@post
                 result.onSuccess { playlists ->
                     screen.removeView(status)
-                    val labels = playlists.map { p -> if (p.trackCount > 0) "${p.title}  ·  ${getString(R.string.track_count, p.trackCount)}" else p.title }
+                    val labels = playlists.map { p -> if (p.trackCount > 0) "${p.title}  ·  ${resources.getQuantityString(R.plurals.track_count, p.trackCount, p.trackCount)}" else p.title }
                     val list = ListView(this).apply {
                         divider = ColorDrawable(Color.rgb(38,38,38)); dividerHeight = 1; selector = selectableBackground()
                         adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_list_item_1, labels)
@@ -1228,13 +1352,15 @@ class MainActivity : Activity(), PlaybackController.Listener {
             .setCancelable(false)
             .show()
         io.execute {
-            val result = runCatching { webApi.profileLikes(profile, 300) }
+            val result = runCatching {
+                val likes = webApi.profileLikes(profile, 300)
+                likes to if (likes.isEmpty()) 0 else collections.importLikes(likes)
+            }
             main.post {
                 loading.dismiss()
-                result.onSuccess { likes ->
+                result.onSuccess { (likes, added) ->
                     if (likes.isEmpty()) toast(getString(R.string.public_profile_no_likes)) else {
-                        val added = collections.importLikes(likes)
-                        toast(if (added > 0) getString(R.string.imported_likes, added) else getString(R.string.no_new_likes))
+                        toast(if (added > 0) resources.getQuantityString(R.plurals.imported_likes, added, added) else getString(R.string.no_new_likes))
                         showLikes()
                     }
                 }.onFailure { toast(getString(R.string.public_profile_failed)) }
@@ -1254,7 +1380,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 result.onSuccess { uploads ->
                     if (uploads.isEmpty()) toast(getString(R.string.public_profile_no_uploads)) else {
                         updateHomeCollection(uploads, 0)
-                        toast(getString(R.string.queue_replaced, uploads.size))
+                        playback.stop()
+                        showTrack(uploads.first())
+                        toast(resources.getQuantityString(R.plurals.queue_replaced, uploads.size, uploads.size))
                         showHomeTab()
                     }
                 }.onFailure { toast(getString(R.string.public_profile_failed)) }
@@ -1303,6 +1431,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun handleAuthIntent(incoming: Intent?) {
         val data = incoming?.data ?: return
         if (data.scheme != "cloudwalk" || data.host != "auth" || data.path != "/callback") return
+        // OAuth codes are one-time values. Consume the callback URI immediately so an
+        // Activity recreation cannot exchange the same code a second time.
+        incoming.data = null
         val code = data.getQueryParameter("code")
         val error = data.getQueryParameter("error")
         if (!error.isNullOrBlank()) {
@@ -1439,16 +1570,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
             nextPublicOffset = SEARCH_PAGE_SIZE
             searchInFlight = true
             io.execute {
-                val publicPaged = !isSoundCloudUrl(q) && !hasAccount()
+                val publicPaged = !isSoundCloudUrl(q)
                 var resolvedProfile: SoundCloudPublicProfile? = null
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
                         val resolved = webApi.resolvePublicUrl(q)
                         resolvedProfile = resolved.profile
                         resolved.track?.let(::listOf).orEmpty()
-                    } else if (hasAccount()) {
-                        api.searchTracks(q, SEARCH_PAGE_SIZE)
                     } else {
+                        // Public search is intentionally broker/account independent. Account
+                        // auth is only needed for private account sections such as Likes/Playlists.
                         webApi.searchTracks(q, SEARCH_PAGE_SIZE, 0)
                     }
                 }
@@ -1458,6 +1589,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     if (overlay === screen && serial == searchSerial) {
                         attempt.onSuccess { items ->
                             resolvedProfile?.let { profile ->
+                                showSearchStatus(null)
                                 showPublicProfileActions(profile)
                                 return@onSuccess
                             }
@@ -1516,6 +1648,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         showTopLevelOverlay(screen, 1); search.requestFocus()
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun showNowPlaying(track: Track) {
         val cached = nowPlayingScreen
         if (cached != null) {
@@ -1536,6 +1669,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 setOnClickListener {
                     val current = selectedTrack ?: return@setOnClickListener
                     val liked = collections.toggleLike(current)
+                    likesRefresh?.invoke()
                     refreshNowPlaying(current)
                     performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                     toast(if (liked) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes))
@@ -1590,6 +1724,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         if (swipe) {
                             performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                             playRelative(if (dx < 0f) 1 else -1)
+                        } else if (event.actionMasked == android.view.MotionEvent.ACTION_UP) {
+                            view.performClick()
                         }
                         true
                     }
@@ -1694,7 +1830,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
         nowPlayingLike?.setColorFilter(if (liked) Color.rgb(255, 123, 38) else Color.WHITE)
         nowPlayingLike?.contentDescription = if (liked) getString(R.string.unlike) else getString(R.string.like)
         val index = homeTracks.indexOfFirst { it.id == track.id }
-        nowPlayingPosition?.text = if (index >= 0) getString(R.string.queue_position, index + 1, homeTracks.size) else ""
+        val queueOrder = currentQueueOrder()
+        val queueIndex = queueOrder.indexOfFirst { it.id == track.id }
+        nowPlayingPosition?.text = if (queueIndex >= 0) getString(R.string.queue_position, queueIndex + 1, queueOrder.size) else ""
         val canWrap = repeatMode == RepeatMode.ALL && homeTracks.size > 1
         val shuffleIndex = if (shuffleEnabled) shuffledTrackIds.indexOf(track.id) else -1
         val canPrev = if (shuffleEnabled) shuffleIndex > 0 || canWrap else index > 0 || canWrap
@@ -1718,24 +1856,39 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun persistQueue() {
-        val snapshot = homeTracks.toList()
-        io.execute { collections.saveQueue(snapshot) }
+        // Queue mutations are infrequent and capped at MAX_HOME_QUEUE. Persist immediately
+        // so an immediate Activity finish cannot cancel a queued write in io.shutdownNow().
+        collections.saveQueue(homeTracks)
     }
 
     private fun updateHomeCollection(items: List<Track>, selectedIndex: Int = 0) {
         if (items.isEmpty()) return
         val snapshot = if (items === homeTracks) ArrayList(items) else items
+        val sourceIndex = selectedIndex.coerceIn(0, snapshot.lastIndex)
+        val queueItems: List<Track>
+        val queueIndex: Int
+        if (snapshot.size <= MAX_HOME_QUEUE) {
+            queueItems = snapshot
+            queueIndex = sourceIndex
+        } else {
+            // Keep some history before the selected item while guaranteeing the chosen
+            // track is inside the bounded old-phone-friendly queue.
+            val preferredHistory = MAX_HOME_QUEUE / 3
+            val start = (sourceIndex - preferredHistory).coerceIn(0, snapshot.size - MAX_HOME_QUEUE)
+            queueItems = snapshot.subList(start, start + MAX_HOME_QUEUE).toList()
+            queueIndex = sourceIndex - start
+        }
+
         homeTracks.clear()
-        homeTracks.addAll(snapshot)
+        homeTracks.addAll(queueItems)
         persistQueue()
         flowView.tracks = homeTracks
         updateQueueFlowHeader()
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
-        val safeIndex = selectedIndex.coerceIn(0, homeTracks.lastIndex)
-        focusedTrack = homeTracks[safeIndex]
-        flowView.setSelected(safeIndex, false)
+        focusedTrack = homeTracks[queueIndex]
+        flowView.setSelected(queueIndex, false)
         syncHomeSurfaceVisibility()
-        rebuildShuffleOrder(selectedTrack?.id)
+        rebuildShuffleOrder(homeTracks[queueIndex].id)
         updateMediaSessionQueue()
     }
 
@@ -1883,16 +2036,28 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 setOnItemClickListener { _, _, position, _ ->
                     val track = queueItems[position]
                     val homeIndex = homeTracks.indexOfFirst { it.id == track.id }.coerceAtLeast(0)
+                    val returnsToNowPlaying = overlayStack.peekLast() === nowPlayingScreen
                     flowView.setSelected(homeIndex, false)
                     play(track)
                     closeOverlay()
-                    showNowPlaying(track)
+                    if (!returnsToNowPlaying) {
+                        main.postDelayed({
+                            if (!isDestroyed && !isFinishing) showNowPlaying(track)
+                        }, if (lowPowerMode) 0L else 190L)
+                    }
                 }
                 setOnItemLongClickListener { _, _, position, _ -> showTrackMenu(queueItems[position], allowRemoveFromQueue = true); true }
             }
             screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         }
         showOverlay(screen)
+    }
+
+    private fun reopenQueueAfterMutation() {
+        closeOverlay()
+        main.postDelayed({
+            if (!isDestroyed && !isFinishing) showQueue()
+        }, if (lowPowerMode) 0L else 190L)
     }
 
     private fun showTrackMenu(track: Track, position: Int = homeTracks.indexOfFirst { it.id == track.id }, allowRemoveFromQueue: Boolean = false) {
@@ -1922,8 +2087,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         persistQueue()
                         flowView.tracks = homeTracks
                         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
-                        rebuildShuffleOrder(selectedTrack?.id)
                         if (shuffleEnabled) {
+                            // Preserve the existing shuffled order; Play next should only move
+                            // the requested track directly after the current item.
                             shuffledTrackIds.remove(track.id)
                             val shuffleCurrent = shuffledTrackIds.indexOf(selectedTrack?.id)
                             val shuffleInsert = if (shuffleCurrent >= 0) (shuffleCurrent + 1).coerceAtMost(shuffledTrackIds.size) else shuffledTrackIds.size
@@ -1932,13 +2098,23 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         updateMediaSessionQueue()
                         toast(getString(R.string.playing_next))
                         if (allowRemoveFromQueue && overlay != null) {
-                            closeOverlay()
-                            showQueue()
+                            reopenQueueAfterMutation()
                         }
                     }
-                    getString(R.string.add_to_likes), getString(R.string.remove_from_likes) -> { collections.toggleLike(track); toast(if (collections.isLiked(track)) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes)) }
-                    getString(R.string.keep_for_session) -> playback.keepForSession(track) { _, message -> toast(message) }
-                    getString(R.string.remove_session_cache) -> { sessionCache.remove(track); toast(getString(R.string.removed_session_cache)) }
+                    getString(R.string.add_to_likes), getString(R.string.remove_from_likes) -> {
+                        collections.toggleLike(track)
+                        likesRefresh?.invoke()
+                        toast(if (collections.isLiked(track)) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes))
+                    }
+                    getString(R.string.keep_for_session) -> playback.keepForSession(track) { ok, message ->
+                        if (ok) libraryRefresh?.invoke()
+                        toast(message)
+                    }
+                    getString(R.string.remove_session_cache) -> {
+                        sessionCache.remove(track)
+                        libraryRefresh?.invoke()
+                        toast(getString(R.string.removed_session_cache))
+                    }
                     getString(R.string.artist_tracks) -> {
                         if (!isOnline()) { toast(getString(R.string.offline)); return@setItems }
                         toast(getString(R.string.loading))
@@ -1978,8 +2154,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         updateMediaSessionQueue()
                         setViewMode(showingFlow)
                         toast(getString(R.string.removed_from_queue))
-                        closeOverlay()
-                        showQueue()
+                        reopenQueueAfterMutation()
                     }
                 }
             }.show()
@@ -1987,6 +2162,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun showTopLevelOverlay(view: View, tabIndex: Int) {
         hideKeyboard()
+        recentRefresh = null
+        if (tabIndex != 2) likesRefresh = null
+        if (tabIndex != 3) libraryRefresh = null
         val previous = overlay
         val previousTab = currentTopTab
         overlayStack.clear()
@@ -2105,6 +2283,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (overlayTransitionRunning) return
         deferArtworkLoads = false
         val current = overlay ?: return
+        if (current.tag == RECENT_SCREEN_TAG) recentRefresh = null
         val previous = if (overlayStack.isNotEmpty()) overlayStack.removeLast() else null
         overlay = previous
 
@@ -2123,23 +2302,38 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlayTransitionRunning = true
         current.animate().cancel()
         val nowPlaying = current === nowPlayingScreen
+        val duration = if (nowPlaying) 165L else 135L
+        var transitionFinished = false
+        fun finishTransition() {
+            if (transitionFinished) return
+            transitionFinished = true
+            (current.parent as? ViewGroup)?.removeView(current)
+            resetMotionState(current)
+            overlayTransitionRunning = false
+            syncHomeSurfaceVisibility()
+        }
         current.animate()
             .alpha(if (nowPlaying) 0.25f else 0f)
             .translationX(if (nowPlaying) 0f else dp(18).toFloat())
             .translationY(if (nowPlaying) dp(38).toFloat() else 0f)
             .scaleX(if (nowPlaying) 0.98f else 0.996f)
             .scaleY(if (nowPlaying) 0.98f else 0.996f)
-            .setDuration(if (nowPlaying) 165L else 135L)
+            .setDuration(duration)
             .setInterpolator(android.view.animation.AccelerateInterpolator(1.25f))
-            .withEndAction {
-                (current.parent as? ViewGroup)?.removeView(current)
-                resetMotionState(current)
-                overlayTransitionRunning = false
-                syncHomeSurfaceVisibility()
-            }
+            .withEndAction(::finishTransition)
             .start()
+        // ViewPropertyAnimator end actions are not guaranteed to run when another
+        // transition/lifecycle event cancels the animation. Never let that leave Back
+        // navigation permanently locked behind overlayTransitionRunning.
+        main.postDelayed({
+            if (!transitionFinished) {
+                current.animate().cancel()
+                finishTransition()
+            }
+        }, duration + 120L)
     }
 
+    @SuppressLint("GestureBackNavigation")
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() { handleBackAction() }
 
@@ -2266,10 +2460,11 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     which < CacheSettings.PRESETS_MB.size -> {
                         val mb = CacheSettings.PRESETS_MB[which]
                         sessionCache.setMaxBytes(mb.toLong() * 1024L * 1024L)
+                        libraryRefresh?.invoke()
                         toast(getString(R.string.session_cache_set, mb))
                     }
                     which == CacheSettings.PRESETS_MB.size -> showCustomCacheDialog()
-                    else -> { sessionCache.clear(); toast(getString(R.string.session_cache_cleared)) }
+                    else -> { sessionCache.clear(); libraryRefresh?.invoke(); toast(getString(R.string.session_cache_cleared)) }
                 }
             }
             .show()
@@ -2279,7 +2474,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         val input = EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
             hint = "MB"
-            setText((sessionCache.maxBytes() / (1024L * 1024L)).toString())
+            setText(String.format(Locale.getDefault(), "%d", sessionCache.maxBytes() / (1024L * 1024L)))
             selectAll()
         }
         AlertDialog.Builder(this)
@@ -2289,16 +2484,19 @@ class MainActivity : Activity(), PlaybackController.Listener {
             .setPositiveButton(getString(R.string.save)) { _, _ ->
                 val mb = input.text.toString().toLongOrNull()?.coerceIn(16L, 2048L) ?: return@setPositiveButton
                 sessionCache.setMaxBytes(mb * 1024L * 1024L)
+                libraryRefresh?.invoke()
                 toast(getString(R.string.session_cache_set, mb))
             }
             .setNegativeButton(getString(R.string.cancel), null)
             .show()
     }
 
+    @SuppressLint("ClickableViewAccessibility", "SuspiciousIndentation")
     private fun installSwipeToCache(list: ListView, items: List<Track>) {
         var downX = 0f
         var downY = 0f
         var activeRow: View? = null
+        var activeAction: TextView? = null
         var activeTrack: Track? = null
         var horizontal = false
         var thresholdHaptic = false
@@ -2312,7 +2510,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 activeRow?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(120L)?.start()
             }
             list.requestDisallowInterceptTouchEvent(false)
+            activeAction?.alpha = 0f
             activeRow = null
+            activeAction = null
             activeTrack = null
             horizontal = false
             thresholdHaptic = false
@@ -2321,6 +2521,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         fun takeHorizontalGesture(event: android.view.MotionEvent) {
             if (horizontal) return
             horizontal = true
+            activeAction?.alpha = 1f
             list.cancelLongPress()
             val cancel = android.view.MotionEvent.obtain(event).apply {
                 action = android.view.MotionEvent.ACTION_CANCEL
@@ -2346,14 +2547,17 @@ class MainActivity : Activity(), PlaybackController.Listener {
                             activeTrack = candidate
                             val container = list.getChildAt(position - list.firstVisiblePosition)
                             activeRow = container?.findViewById(android.R.id.content) ?: container
+                            activeAction = container?.findViewById(android.R.id.hint)
                             activeRow?.animate()?.cancel()
                         } else {
                             activeTrack = null
                             activeRow = null
+                            activeAction = null
                         }
                     } else {
                         activeTrack = null
                         activeRow = null
+                        activeAction = null
                     }
                     // Let ListView handle taps, long-press and vertical scrolling normally.
                     false
@@ -2413,6 +2617,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                                             setBackgroundColor(if (ok) Color.rgb(72, 110, 72) else Color.rgb(205, 86, 26))
                                         }
                                         (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
+                                        if (ok) libraryRefresh?.invoke()
                                         toast(message)
                                     }
                                 }
@@ -2499,6 +2704,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun play(track: Track) {
         collections.addRecent(track)
+        recentRefresh?.invoke()
+        libraryRefresh?.invoke()
         showTrack(track)
         playback.play(track)
     }
@@ -2597,6 +2804,19 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (playing) startProgressTicker()
     }
 
+    override fun onResume() {
+        super.onResume()
+        activityVisible = true
+        syncPlaybackPositionUi()
+        if (playing) startProgressTicker()
+    }
+
+    override fun onPause() {
+        activityVisible = false
+        stopProgressTicker()
+        super.onPause()
+    }
+
     override fun onStop() {
         activityVisible = false
         stopProgressTicker()
@@ -2634,10 +2854,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
             schedulePlaybackKeepAliveStop()
             return
         }
-        progress.progress = 0
-        nowPlayingSeek?.progress = 0
-        if (repeatMode == RepeatMode.ONE) {
-            play(track)
+        if (repeatMode == RepeatMode.ONE || (repeatMode == RepeatMode.ALL && homeTracks.size == 1)) {
+            playback.restart()
             return
         }
         val index = homeTracks.indexOfFirst { it.id == track.id }
@@ -2663,7 +2881,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (!::mediaSession.isInitialized) return
         val intent = Intent(this, PlaybackKeepAliveService::class.java)
             .putExtra(PlaybackKeepAliveService.EXTRA_SESSION_TOKEN, mediaSession.sessionToken)
-        if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+        startForegroundService(intent)
     }
 
     private fun schedulePlaybackKeepAliveStop() {
@@ -2671,7 +2889,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         playbackServiceStop = Runnable {
             stopService(Intent(this, PlaybackKeepAliveService::class.java))
             playbackServiceStop = null
-        }.also { main.postDelayed(it, 10_000L) }
+        }.also { main.postDelayed(it, PAUSED_PLAYBACK_SERVICE_GRACE_MS) }
     }
 
     private fun stopPlaybackKeepAliveNow() {
@@ -2680,12 +2898,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
         stopService(Intent(this, PlaybackKeepAliveService::class.java))
     }
 
+    @SuppressLint("SuspiciousIndentation")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         artwork.trimMemory(level)
     }
 
     override fun onDestroy() {
+        unregisterPredictiveBackCompat()
         stopProgressTicker()
         cancelSleepTimer(false)
         stopPlaybackKeepAliveNow()
@@ -2706,6 +2926,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         override fun getItemId(position: Int): Long = getItem(position).id.hashCode().toUInt().toLong()
         override fun hasStableIds(): Boolean = true
 
+        @SuppressLint("ClickableViewAccessibility", "SuspiciousIndentation")
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
             val row = (convertView as? FrameLayout) ?: FrameLayout(this@MainActivity).apply {
                 minimumHeight = dp(64)
@@ -2759,17 +2980,24 @@ class MainActivity : Activity(), PlaybackController.Listener {
             title.setTextColor(if (isCurrent) Color.rgb(255, 123, 38) else Color.WHITE)
             val subtitle = row.findViewById<TextView>(android.R.id.text2)
             val action = row.findViewById<TextView>(android.R.id.hint)
+            val isLocal = !track.localUri.isNullOrBlank()
+            val isCached = !isLocal && playback.isSessionCached(track)
+            val isCaching = !isLocal && cachingTrackIds.contains(track.id)
+            val canCache = !isLocal && playback.canSessionCache(track)
             when {
-                !track.localUri.isNullOrBlank() -> { action.text = getString(R.string.local_badge); action.setBackgroundColor(Color.rgb(72, 72, 72)) }
-                playback.isSessionCached(track) -> { action.text = getString(R.string.cached_badge); action.setBackgroundColor(Color.rgb(72, 110, 72)) }
-                cachingTrackIds.contains(track.id) -> { action.text = getString(R.string.caching_badge); action.setBackgroundColor(Color.rgb(160, 78, 28)) }
-                playback.canSessionCache(track) -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
+                isLocal -> { action.text = getString(R.string.local_badge); action.setBackgroundColor(Color.rgb(72, 72, 72)) }
+                isCached -> { action.text = getString(R.string.cached_badge); action.setBackgroundColor(Color.rgb(72, 110, 72)) }
+                isCaching -> { action.text = getString(R.string.caching_badge); action.setBackgroundColor(Color.rgb(160, 78, 28)) }
+                canCache -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
                 else -> { action.text = ""; action.setBackgroundColor(Color.TRANSPARENT) }
             }
+            // The badge is the swipe-reveal background. Keeping it transparent while idle
+            // avoids issuing a full extra text/background draw for every visible row.
+            action.alpha = 0f
             subtitle.text = when {
-                !track.localUri.isNullOrBlank() -> "${track.artist} · ${getString(R.string.local_badge)}"
-                playback.isSessionCached(track) -> "${track.artist} · ${getString(R.string.cached_badge)}"
-                cachingTrackIds.contains(track.id) -> "${track.artist} · ${getString(R.string.caching_badge)}"
+                isLocal -> "${track.artist} · ${getString(R.string.local_badge)}"
+                isCached -> "${track.artist} · ${getString(R.string.cached_badge)}"
+                isCaching -> "${track.artist} · ${getString(R.string.caching_badge)}"
                 else -> track.artist
             }
             row.findViewById<View?>(android.R.id.icon2)?.setOnTouchListener { handle, event ->
@@ -2790,6 +3018,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
         list: ListView,
         onScroll: ((firstVisibleItem: Int, visibleItemCount: Int, totalItemCount: Int) -> Unit)? = null
     ) {
+        @Suppress("DEPRECATION")
+        list.isScrollingCacheEnabled = false
+        list.setCacheColorHint(Color.TRANSPARENT)
         list.setOnScrollListener(object : AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) {
                 val shouldDefer = scrollState != AbsListView.OnScrollListener.SCROLL_STATE_IDLE

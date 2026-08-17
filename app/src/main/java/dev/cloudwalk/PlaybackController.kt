@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -46,6 +47,7 @@ class PlaybackController(
     private var currentTrack: Track? = null
     private var resumeAfterFocusGain = false
     @Volatile private var desiredPlaying = false
+    @Volatile private var playbackEnded = false
     private var released = false
     private val playGeneration = AtomicInteger()
 
@@ -116,13 +118,22 @@ class PlaybackController(
     }
 
     fun play(track: Track) {
-        if (currentTrack?.id == track.id && (mediaPlayer != null || exoPlayer != null)) {
-            resume()
-            return
+        val sameTrack = currentTrack?.id == track.id
+        val hasPlayer = mediaPlayer != null || exoPlayer != null
+        if (sameTrack && hasPlayer) {
+            if (prepared) {
+                resume()
+                return
+            }
+            // A second tap while the same source is still resolving/preparing should not
+            // spawn another player. If the previous attempt already failed, however,
+            // desiredPlaying is false and we deliberately fall through to a clean retry.
+            if (desiredPlaying) return
         }
 
         val generation = playGeneration.incrementAndGet()
         desiredPlaying = true
+        playbackEnded = false
         releasePlayers()
         currentTrack = track
         listener?.onBuffering(track)
@@ -139,6 +150,12 @@ class PlaybackController(
                 sessionCache.cachedFile(track)?.let { cached ->
                     main.post {
                         if (isCurrentRequest(generation, track)) prepareDirect(track, cached.absolutePath)
+                    }
+                    return@execute
+                }
+                sessionCache.cachedHlsStream(track)?.let { cachedStream ->
+                    main.post {
+                        if (isCurrentRequest(generation, track)) prepareSoundCloudHls(track, cachedStream)
                     }
                     return@execute
                 }
@@ -165,7 +182,8 @@ class PlaybackController(
         !released && generation == playGeneration.get() && currentTrack?.id == track.id
 
     fun canSessionCache(track: Track): Boolean =
-        track.localUri.isNullOrBlank() && !track.streamUrl.isNullOrBlank()
+        track.localUri.isNullOrBlank() &&
+            (!track.streamUrl.isNullOrBlank() || !track.permalinkUrl.isNullOrBlank())
 
     fun keepForSession(track: Track, onProgress: (Int) -> Unit = {}, callback: (Boolean, String) -> Unit) {
         if (!canSessionCache(track)) {
@@ -199,14 +217,27 @@ class PlaybackController(
     fun isSessionCached(track: Track): Boolean = sessionCache.isCached(track)
 
     private fun resolveSource(track: Track): PlaybackSource {
-        if (!track.streamUrl.isNullOrBlank()) {
-            val resolved = webApi.resolvePublicStream(track.streamUrl, track.permalinkUrl)
-            return if (resolved.protocol.contains("encrypted-hls", ignoreCase = true)) {
+        fun fromWebEndpoint(endpoint: String): PlaybackSource {
+            val resolved = webApi.resolvePublicStream(endpoint, track.permalinkUrl)
+            return if (resolved.protocol.contains("hls", ignoreCase = true)) {
                 PlaybackSource.SoundCloudHls(resolved)
             } else {
                 PlaybackSource.Direct(resolved.url)
             }
         }
+
+        track.streamUrl?.takeIf { it.isNotBlank() }?.let { endpoint ->
+            return fromWebEndpoint(endpoint)
+        }
+
+        // OAuth/API track objects do not currently carry CloudWalk's web transcoding
+        // endpoint. Prefer the already-validated public AAC HLS/Widevine route whenever
+        // the permalink resolves publicly, then fall back to account-only streams.
+        track.permalinkUrl?.takeIf { it.isNotBlank() }?.let { permalink ->
+            val publicEndpoint = runCatching { webApi.resolveTrackUrl(permalink)?.streamUrl }.getOrNull()
+            if (!publicEndpoint.isNullOrBlank()) return fromWebEndpoint(publicEndpoint)
+        }
+
         val url = api.streamUrls(track.id).preferred()
             ?: throw IllegalStateException(appContext.getString(R.string.no_playable_stream))
         return PlaybackSource.Direct(url)
@@ -226,10 +257,12 @@ class PlaybackController(
         prepared = false
         runCatching {
             player.setAudioAttributes(audioAttributes)
+            player.setWakeMode(appContext, PowerManager.PARTIAL_WAKE_LOCK)
             player.dataSource()
             player.setOnPreparedListener { ready ->
                 if (ready !== mediaPlayer || currentTrack?.id != track.id || released) return@setOnPreparedListener
                 prepared = true
+                playbackEnded = false
                 listener?.onReady(track, ready.duration)
                 if (desiredPlaying && requestAudioFocus()) {
                     ready.start()
@@ -241,6 +274,7 @@ class PlaybackController(
             player.setOnCompletionListener { completed ->
                 if (completed !== mediaPlayer || currentTrack?.id != track.id || released) return@setOnCompletionListener
                 desiredPlaying = false
+                playbackEnded = true
                 abandonAudioFocus()
                 listener?.onPlayingChanged(track, false)
                 listener?.onCompleted(track)
@@ -249,6 +283,7 @@ class PlaybackController(
                 if (failed !== mediaPlayer || currentTrack?.id != track.id || released) return@setOnErrorListener true
                 prepared = false
                 desiredPlaying = false
+                playbackEnded = false
                 abandonAudioFocus()
                 listener?.onError(track, appContext.getString(R.string.media_player_error, what, extra))
                 main.post { if (failed === mediaPlayer) releasePlayers() }
@@ -264,36 +299,35 @@ class PlaybackController(
     }
 
     private fun prepareSoundCloudHls(track: Track, stream: ResolvedPublicStream) {
-        val licenseToken = stream.licenseAuthToken
-        if (licenseToken.isNullOrBlank()) {
-            listener?.onError(track, appContext.getString(R.string.playback_failed))
-            return
-        }
         val requestHeaders = mapOf("X-SC-Application-Id" to stream.applicationId)
         val mediaSourceFactory = DefaultMediaSourceFactory(appContext)
             .setDataSourceFactory(sessionCache.playbackDataSourceFactory(requestHeaders))
         val exo = ExoPlayer.Builder(appContext)
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
+        exo.setWakeMode(C.WAKE_MODE_NETWORK)
         exoPlayer = exo
         prepared = false
 
-        val encodedToken = URLEncoder.encode(licenseToken, StandardCharsets.UTF_8.name())
-        val licenseUri = "https://license.media-streaming.soundcloud.cloud/playback/widevine?license_token=$encodedToken"
-        val drm = MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
-            .setLicenseUri(licenseUri)
-            .setLicenseRequestHeaders(requestHeaders)
-            .build()
-        val item = MediaItem.Builder()
+        val itemBuilder = MediaItem.Builder()
             .setUri(stream.url)
             .setMimeType(MimeTypes.APPLICATION_M3U8)
-            .setDrmConfiguration(drm)
-            .build()
+        stream.licenseAuthToken?.takeIf { it.isNotBlank() }?.let { licenseToken ->
+            val encodedToken = URLEncoder.encode(licenseToken, StandardCharsets.UTF_8.name())
+            val licenseUri = "https://license.media-streaming.soundcloud.cloud/playback/widevine?license_token=$encodedToken"
+            val drm = MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+                .setLicenseUri(licenseUri)
+                .setLicenseRequestHeaders(requestHeaders)
+                .build()
+            itemBuilder.setDrmConfiguration(drm)
+        }
+        val item = itemBuilder.build()
 
         exo.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (exo !== exoPlayer || currentTrack?.id != track.id || released) return
                 when (playbackState) {
+                    Player.STATE_IDLE -> Unit
                     Player.STATE_BUFFERING -> if (!prepared) listener?.onBuffering(track)
                     Player.STATE_READY -> {
                         val firstReady = !prepared
@@ -306,6 +340,7 @@ class PlaybackController(
                     }
                     Player.STATE_ENDED -> {
                         desiredPlaying = false
+                        playbackEnded = true
                         abandonAudioFocus()
                         listener?.onPlayingChanged(track, false)
                         listener?.onCompleted(track)
@@ -322,12 +357,39 @@ class PlaybackController(
                 if (exo !== exoPlayer || currentTrack?.id != track.id || released) return
                 prepared = false
                 desiredPlaying = false
+                playbackEnded = false
                 abandonAudioFocus()
                 listener?.onError(track, error.cause?.message ?: error.message ?: appContext.getString(R.string.playback_failed))
+                // Drop the failed player so tapping Play on the same track performs a clean
+                // resolve/prepare instead of trying to resume an errored ExoPlayer instance.
+                main.post { if (exo === exoPlayer) releasePlayers() }
             }
         })
         exo.setMediaItem(item)
         exo.prepare()
+    }
+
+
+    fun restart() {
+        if (!prepared || currentTrack == null) return
+        desiredPlaying = true
+        resumeAfterFocusGain = false
+        playbackEnded = false
+        seekTo(0)
+        resumeInternal(requestFocus = true)
+    }
+
+    fun stop() {
+        val stoppedTrack = currentTrack
+        desiredPlaying = false
+        resumeAfterFocusGain = false
+        playGeneration.incrementAndGet()
+        abandonAudioFocus()
+        releasePlayers()
+        currentTrack = null
+        prepared = false
+        playbackEnded = false
+        stoppedTrack?.let { listener?.onPlayingChanged(it, false) }
     }
 
     fun pause() {
@@ -355,6 +417,10 @@ class PlaybackController(
 
     private fun resumeInternal(requestFocus: Boolean) {
         if (!prepared) return
+        if (playbackEnded) {
+            playbackEnded = false
+            seekTo(0)
+        }
         if (requestFocus && !requestAudioFocus()) return
         mediaPlayer?.let { media ->
             if (!runCatching { media.isPlaying }.getOrDefault(false)) {
@@ -376,6 +442,7 @@ class PlaybackController(
 
     fun seekTo(positionMs: Int) {
         if (!prepared) return
+        playbackEnded = false
         val safe = positionMs.coerceAtLeast(0)
         mediaPlayer?.runCatching { seekTo(safe) }
         exoPlayer?.seekTo(safe.toLong())
@@ -413,6 +480,7 @@ class PlaybackController(
         released = true
         playGeneration.incrementAndGet()
         desiredPlaying = false
+        playbackEnded = false
         resumeAfterFocusGain = false
         abandonAudioFocus()
         releasePlayers()

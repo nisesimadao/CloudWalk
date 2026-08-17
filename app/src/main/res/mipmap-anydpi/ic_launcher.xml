@@ -1,21 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="48dp"
-    android:height="48dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:fillColor="#FF0C0C0C" android:pathData="M54,5 A49,49 0,1 0,54,103 A49,49 0,1 0,54,5" />
-    <path
-        android:fillColor="#FFF7F7F7"
-        android:strokeColor="#FF1C232B"
-        android:strokeWidth="4"
-        android:strokeLineJoin="round"
-        android:pathData="M23,75 C15,75 10,68 10,59 C10,51 16,44 24,43 C28,32 38,26 50,26 C64,26 76,36 78,50 C88,50 96,57 96,66 C96,75 89,81 80,81 L23,81 Z" />
-    <path android:pathData="M28,61 L28,65" android:strokeColor="#FFFF6A00" android:strokeWidth="5" android:strokeLineCap="round" />
-    <path android:pathData="M37,56 L37,70" android:strokeColor="#FFFF6A00" android:strokeWidth="5" android:strokeLineCap="round" />
-    <path android:pathData="M46,50 L46,76" android:strokeColor="#FFFF6A00" android:strokeWidth="6" android:strokeLineCap="round" />
-    <path android:pathData="M54,42 L54,84" android:strokeColor="#FFFF6A00" android:strokeWidth="7" android:strokeLineCap="round" />
-    <path android:pathData="M62,50 L62,76" android:strokeColor="#FFFF6A00" android:strokeWidth="6" android:strokeLineCap="round" />
-    <path android:pathData="M71,56 L71,70" android:strokeColor="#FFFF6A00" android:strokeWidth="5" android:strokeLineCap="round" />
-    <path android:pathData="M80,61 L80,65" android:strokeColor="#FFFF6A00" android:strokeWidth="5" android:strokeLineCap="round" />
-</vector>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MonochromeLauncherIcon">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+</adaptive-icon>

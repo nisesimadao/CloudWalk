@@ -32,17 +32,15 @@ class PlaybackKeepAliveService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        if (Build.VERSION.SDK_INT >= 26) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                getString(R.string.playback_channel),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getString(R.string.playback_channel_desc)
-                setShowBadge(false)
-            }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val channel = NotificationChannel(
+            CHANNEL_ID,
+            getString(R.string.playback_channel),
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = getString(R.string.playback_channel_desc)
+            setShowBadge(false)
         }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -105,11 +103,10 @@ class PlaybackKeepAliveService : Service() {
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val previous = servicePendingIntent(ACTION_PREVIOUS, 2)
-        val playPause = servicePendingIntent(ACTION_PLAY_PAUSE, 3)
-        val next = servicePendingIntent(ACTION_NEXT, 4)
-
-        return Notification.Builder(this, CHANNEL_ID)
+        val actions = state?.actions ?: 0L
+        val canPrevious = actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L
+        val canNext = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_play)
             .setContentTitle(title)
             .setContentText(artist)
@@ -119,11 +116,42 @@ class PlaybackKeepAliveService : Service() {
             .setShowWhen(false)
             .setOnlyAlertOnce(true)
             .setOngoing(playing)
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_prev), getString(R.string.previous), previous).build())
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, if (playing) R.drawable.ic_pause else R.drawable.ic_play), if (playing) getString(R.string.pause) else getString(R.string.play), playPause).build())
-            .addAction(Notification.Action.Builder(Icon.createWithResource(this, R.drawable.ic_next), getString(R.string.next), next).build())
-            .setStyle(Notification.MediaStyle().setMediaSession(sessionToken).setShowActionsInCompactView(0, 1, 2))
-            .build()
+
+        val compact = ArrayList<Int>(3)
+        if (canPrevious) {
+            compact += compact.size
+            builder.addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, R.drawable.ic_prev),
+                    getString(R.string.previous),
+                    servicePendingIntent(ACTION_PREVIOUS, 2)
+                ).build()
+            )
+        }
+        compact += compact.size
+        builder.addAction(
+            Notification.Action.Builder(
+                Icon.createWithResource(this, if (playing) R.drawable.ic_pause else R.drawable.ic_play),
+                if (playing) getString(R.string.pause) else getString(R.string.play),
+                servicePendingIntent(ACTION_PLAY_PAUSE, 3)
+            ).build()
+        )
+        if (canNext) {
+            compact += compact.size
+            builder.addAction(
+                Notification.Action.Builder(
+                    Icon.createWithResource(this, R.drawable.ic_next),
+                    getString(R.string.next),
+                    servicePendingIntent(ACTION_NEXT, 4)
+                ).build()
+            )
+        }
+        builder.setStyle(
+            Notification.MediaStyle()
+                .setMediaSession(sessionToken)
+                .setShowActionsInCompactView(*compact.toIntArray())
+        )
+        return builder.build()
     }
 
     private fun servicePendingIntent(action: String, requestCode: Int): PendingIntent =

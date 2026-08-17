@@ -36,15 +36,19 @@ class LocalCollections(context: Context) {
         if (tracks.isEmpty()) return@synchronized 0
         val before = likes()
         val existing = before.asSequence().map { it.id }.toHashSet()
-        val added = tracks.count { existing.add(it.id) }
-        val merged = ArrayList<Track>(minOf(MAX_LIKES, tracks.size + before.size))
-        val seen = HashSet<String>()
-        (tracks + before).forEach { track ->
-            if (merged.size < MAX_LIKES && seen.add(track.id)) merged += track
-        }
+        val newUnique = ArrayList<Track>()
+        tracks.forEach { track -> if (existing.add(track.id)) newUnique += track }
+
+        // Import must never evict likes the user already had. Put accepted imports first
+        // for visibility, but only consume the remaining capacity.
+        val room = (MAX_LIKES - before.size).coerceAtLeast(0)
+        val accepted = newUnique.take(room)
+        val merged = ArrayList<Track>(accepted.size + before.size)
+        merged.addAll(accepted)
+        merged.addAll(before)
         likesCache = merged
         write("likes", merged)
-        added
+        accepted.size
     }
 
     fun toggleLike(track: Track): Boolean = synchronized(lock) {
@@ -106,7 +110,7 @@ class LocalCollections(context: Context) {
     }
 
     companion object {
-        private const val MAX_LIKES = 300
+        private const val MAX_LIKES = 1000
         private const val MAX_RECENT = 50
         private const val MAX_QUEUE = 120
     }

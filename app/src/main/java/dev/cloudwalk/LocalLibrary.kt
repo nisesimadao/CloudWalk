@@ -55,12 +55,14 @@ class LocalLibrary(context: Context) {
             runCatching { readTrack(uri) }.getOrNull()?.let(parsed::add)
         }
         if (parsed.isEmpty()) return 0
+        var added = 0
         synchronized(lock) {
             val existing = LinkedHashMap<String, Track>()
             all().forEach { track -> track.localUri?.let { existing[it] = track } }
             for (track in parsed) {
                 val uri = track.localUri ?: continue
                 val previous = existing[uri]
+                if (previous == null) added++
                 if (previous?.artworkUrl != null && previous.artworkUrl != track.artworkUrl) {
                     deleteArtwork(previous.artworkUrl)
                 }
@@ -68,7 +70,7 @@ class LocalLibrary(context: Context) {
             }
             saveLocked(existing.values.toList())
         }
-        return parsed.size
+        return added
     }
 
     fun remove(track: Track) = synchronized(lock) {

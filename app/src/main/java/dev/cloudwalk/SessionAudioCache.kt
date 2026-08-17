@@ -1,9 +1,9 @@
 package dev.cloudwalk
 
 import android.content.Context
+import android.annotation.SuppressLint
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -20,7 +20,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
-@UnstableApi
+@SuppressLint("UnsafeOptInUsageError")
 class SessionAudioCache(
     context: Context,
     private val settings: CacheSettings = CacheSettings(context)
@@ -234,6 +234,10 @@ class SessionAudioCache(
                 callback(ok, if (ok) appContext.getString(R.string.cached_for_session) else failureMessage)
             }
         }
+    }
+
+    fun cachedHlsStream(track: Track): ResolvedPublicStream? = synchronized(registryLock) {
+        hlsStreams[track.id]
     }
 
     fun isCached(track: Track): Boolean = synchronized(registryLock) {

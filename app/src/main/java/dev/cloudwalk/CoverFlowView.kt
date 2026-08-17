@@ -1,6 +1,7 @@
 package dev.cloudwalk
 
 import android.content.Context
+import android.annotation.SuppressLint
 import android.graphics.*
 import android.util.AttributeSet
 import android.view.GestureDetector
@@ -156,7 +157,7 @@ class CoverFlowView @JvmOverloads constructor(
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (tracks.isEmpty() || wasDragging) return true
             val index = indexAt(e.x)
-            if (index == selectedIndex) onTrackClick?.invoke(tracks[index]) else setSelected(index, true)
+            if (index == selectedIndex) performClick() else setSelected(index, true)
             return true
         }
 
@@ -169,22 +170,22 @@ class CoverFlowView @JvmOverloads constructor(
         }
     })
 
+    @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-        }
         detector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
             if (!flingHandled && scroller.isFinished) snapToNearest()
             flingHandled = false
             removeCallbacks(promoteArtworkRunnable)
             postDelayed(promoteArtworkRunnable, 190L)
-            performClick()
         }
         return true
     }
 
     override fun performClick(): Boolean {
         super.performClick()
+        val track = tracks.getOrNull(selectedIndex) ?: return false
+        onTrackClick?.invoke(track)
         return true
     }
 
