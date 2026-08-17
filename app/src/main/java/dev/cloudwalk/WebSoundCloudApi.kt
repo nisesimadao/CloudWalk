@@ -15,6 +15,8 @@ class WebSoundCloudApi(context: Context) {
     private val prefs = context.getSharedPreferences("cloudwalk_web", Context.MODE_PRIVATE)
     private val base = "https://api-v2.soundcloud.com"
     private val seedClientId = "UMY1dzQ68n2QbCuypNe8JOivmV2FO2Ep"
+    private val clientIdLock = Any()
+    @Volatile private var cachedClientId: String? = prefs.getString("client_id", null)?.takeIf { it.isNotBlank() }
 
     fun searchTracks(query: String, limit: Int = 30): List<Track> {
         val q = URLEncoder.encode(query, StandardCharsets.UTF_8.name())
@@ -110,36 +112,55 @@ class WebSoundCloudApi(context: Context) {
             block(id)
         } catch (error: HttpStatusException) {
             if (error.code != 401 && error.code != 403) throw error
-            val refreshed = discoverClientId()
+            val refreshed = refreshClientId(id)
             block(refreshed)
         }
     }
 
-    private fun clientId(): String {
-        val cached = prefs.getString("client_id", null)
-        val fetchedAt = prefs.getLong("client_id_fetched_at", 0L)
-        if (!cached.isNullOrBlank() && System.currentTimeMillis() - fetchedAt < CLIENT_ID_TTL_MS) return cached
-        return seedClientId
+    private fun clientId(): String = cachedClientId ?: seedClientId
+
+    private fun refreshClientId(failedId: String): String = synchronized(clientIdLock) {
+        val current = clientId()
+        if (current != failedId) return@synchronized current
+        discoverClientId()
     }
 
     private fun discoverClientId(): String {
         val html = get("https://soundcloud.com")
-        val scripts = Regex("""<script[^>]+src=["']([^"']+)["']""").findAll(html)
+        val directPatterns = listOf(
+            Regex("""[\"']clientId[\"']\s*:\s*[\"']([A-Za-z0-9]{20,64})[\"']"""),
+            Regex("""[\"']client_id[\"']\s*:\s*[\"']([A-Za-z0-9]{20,64})[\"']""")
+        )
+        directPatterns.firstNotNullOfOrNull { it.find(html) }?.groupValues?.getOrNull(1)?.let {
+            return saveClientId(it)
+        }
+
+        val scripts = Regex("""<script[^>]+src=[\"']([^\"']+)[\"']""").findAll(html)
             .map { it.groupValues[1] }
-            .filter { it.contains("a-v2.sndcdn.com/assets/") }
+            .filter { src ->
+                runCatching {
+                    val host = URL(src).host
+                    host.endsWith("sndcdn.com", ignoreCase = true) && src.contains(".js", ignoreCase = true)
+                }.getOrDefault(false)
+            }
             .toList().asReversed()
         val patterns = listOf(
-            Regex("""client_id\s*[:=]\s*["']([A-Za-z0-9]{20,64})["']"""),
-            Regex("""["']client_id["']\s*:\s*["']([A-Za-z0-9]{20,64})["']""")
+            Regex("""client_id\s*[:=]\s*[\"']([A-Za-z0-9]{20,64})[\"']"""),
+            Regex("""[\"']client_id[\"']\s*:\s*[\"']([A-Za-z0-9]{20,64})[\"']"""),
+            Regex("""[\"']clientId[\"']\s*:\s*[\"']([A-Za-z0-9]{20,64})[\"']""")
         )
-        for (script in scripts.take(12)) {
+        for (script in scripts.take(16)) {
             val js = runCatching { get(script) }.getOrNull() ?: continue
             val match = patterns.firstNotNullOfOrNull { it.find(js) } ?: continue
-            val id = match.groupValues[1]
-            prefs.edit().putString("client_id", id).putLong("client_id_fetched_at", System.currentTimeMillis()).apply()
-            return id
+            return saveClientId(match.groupValues[1])
         }
         throw IllegalStateException("Could not discover SoundCloud web client id")
+    }
+
+    private fun saveClientId(id: String): String {
+        cachedClientId = id
+        prefs.edit().putString("client_id", id).remove("client_id_fetched_at").apply()
+        return id
     }
 
     private fun isShortUrl(url: String): Boolean = runCatching { URL(url).host.equals("on.soundcloud.com", true) }.getOrDefault(false)
@@ -180,7 +201,6 @@ class WebSoundCloudApi(context: Context) {
 
     companion object {
         private const val TAG = "CloudWalkWeb"
-        private const val CLIENT_ID_TTL_MS = 3L * 24 * 60 * 60 * 1000
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 9; CloudWalk) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36"
     }
 }
