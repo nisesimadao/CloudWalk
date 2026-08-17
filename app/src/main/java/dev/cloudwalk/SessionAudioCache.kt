@@ -32,7 +32,9 @@ class SessionAudioCache(
 
     fun cachedFile(track: Track): File? {
         val file = fileFor(track)
-        return file.takeIf { it.exists() && it.length() > 0L }
+        if (file.exists() && file.length() > 0L) return file
+        synchronized(registryLock) { registry.remove(track.id) }
+        return null
     }
 
     fun cache(track: Track, resolvedUrl: String, onProgress: (Int) -> Unit = {}, callback: (Boolean, String) -> Unit) {
