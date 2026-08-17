@@ -458,14 +458,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
         updatePlayButton()
     }
 
-    private fun buildBottomNav(): View = LinearLayout(this).apply {
+    private fun buildBottomNav(activeTab: Int = 0): View = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER
         setBackgroundColor(Color.rgb(17, 17, 17))
-        addView(navItem(R.drawable.ic_home, getString(R.string.home), true) { setViewMode(true) }, LinearLayout.LayoutParams(0, -1, 1f))
-        addView(navItem(R.drawable.ic_search, getString(R.string.search), false) { showSearch() }, LinearLayout.LayoutParams(0, -1, 1f))
-        addView(navItem(R.drawable.ic_like, getString(R.string.likes), false) { showLikes() }, LinearLayout.LayoutParams(0, -1, 1f))
-        addView(navItem(R.drawable.ic_library, getString(R.string.library), false) { showLibrary() }, LinearLayout.LayoutParams(0, -1, 1f))
+        addView(navItem(R.drawable.ic_home, getString(R.string.home), activeTab == 0) { showHomeTab() }, LinearLayout.LayoutParams(0, -1, 1f))
+        addView(navItem(R.drawable.ic_search, getString(R.string.search), activeTab == 1) { showSearch() }, LinearLayout.LayoutParams(0, -1, 1f))
+        addView(navItem(R.drawable.ic_like, getString(R.string.likes), activeTab == 2) { showLikes() }, LinearLayout.LayoutParams(0, -1, 1f))
+        addView(navItem(R.drawable.ic_library, getString(R.string.library), activeTab == 3) { showLibrary() }, LinearLayout.LayoutParams(0, -1, 1f))
     }
 
     private fun navItem(iconRes: Int, label: String, active: Boolean, action: () -> Unit): View = LinearLayout(this).apply {
@@ -479,28 +479,43 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setImageResource(iconRes)
             setColorFilter(if (active) Color.rgb(255, 123, 38) else Color.rgb(165, 165, 165))
             scaleType = ImageView.ScaleType.CENTER
+            contentDescription = label
         }, LinearLayout.LayoutParams(-1, dp(30)))
         addView(TextView(this@MainActivity).apply {
-            text = label; textSize = 11f; gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            text = label
+            textSize = 11f
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            typeface = Typeface.create("sans", if (active) Typeface.BOLD else Typeface.NORMAL)
             setTextColor(if (active) Color.WHITE else Color.rgb(148, 148, 148))
         }, LinearLayout.LayoutParams(-1, dp(24)))
     }
 
+    private fun showHomeTab() {
+        overlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        overlay = null
+        overlayStack.clear()
+        deferArtworkLoads = false
+        syncHomeSurfaceVisibility()
+    }
+
+
     private fun hasAccount(): Boolean = authSession.hasAccount()
 
     private fun showLikes() {
-        showStoredTrackScreen(getString(R.string.likes), collections.likes(), getString(R.string.no_liked_tracks))
+        showStoredTrackScreen(getString(R.string.likes), collections.likes(), getString(R.string.no_liked_tracks), topLevelTab = 2)
     }
 
-    private fun showStoredTrackScreen(title: String, items: List<Track>, emptyMessage: String) {
+    private fun showStoredTrackScreen(title: String, items: List<Track>, emptyMessage: String, topLevelTab: Int? = null) {
         val screen = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.rgb(12, 12, 12))
         }
         val bar = Toolbar(this).apply {
             setBackgroundColor(Color.rgb(12, 12, 12)); this.title = title; setTitleTextColor(Color.WHITE)
-            setNavigationIcon(R.drawable.ic_back); navigationContentDescription = getString(R.string.back)
-            setNavigationOnClickListener { closeOverlay() }
+            if (topLevelTab == null) {
+                setNavigationIcon(R.drawable.ic_back); navigationContentDescription = getString(R.string.back)
+                setNavigationOnClickListener { closeOverlay() }
+            }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         if (items.isEmpty()) {
@@ -526,7 +541,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
             screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
         }
-        showOverlay(screen)
+        if (topLevelTab != null) {
+            screen.addView(buildBottomNav(topLevelTab), LinearLayout.LayoutParams(-1, dp(64)))
+            showTopLevelOverlay(screen)
+        } else {
+            showOverlay(screen)
+        }
     }
 
     private fun showRemoteTrackScreen(title: String, loader: () -> List<Track>) {
@@ -587,8 +607,6 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         val bar = Toolbar(this).apply {
             setBackgroundColor(Color.rgb(12,12,12)); title = getString(R.string.library); setTitleTextColor(Color.WHITE)
-            setNavigationIcon(R.drawable.ic_back); navigationContentDescription = getString(R.string.back)
-            setNavigationOnClickListener { closeOverlay() }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         val list = ListView(this).apply {
@@ -626,7 +644,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
         }
         screen.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
-        showOverlay(screen)
+        screen.addView(buildBottomNav(3), LinearLayout.LayoutParams(-1, dp(64)))
+        showTopLevelOverlay(screen)
     }
 
 
@@ -933,8 +952,6 @@ class MainActivity : Activity(), PlaybackController.Listener {
         val screen = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(Color.rgb(12, 12, 12)) }
         val bar = Toolbar(this).apply {
             setBackgroundColor(Color.rgb(12, 12, 12)); title = getString(R.string.search); setTitleTextColor(Color.WHITE)
-            setNavigationIcon(R.drawable.ic_back); navigationContentDescription = getString(R.string.back)
-            setNavigationOnClickListener { closeOverlay() }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         val search = SearchView(this).apply { queryHint = getString(R.string.search_hint); isIconified = false; imeOptions = EditorInfo.IME_ACTION_SEARCH }
@@ -1110,7 +1127,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 return true
             }
         })
-        showOverlay(screen); search.requestFocus()
+        screen.addView(buildBottomNav(1), LinearLayout.LayoutParams(-1, dp(64)))
+        showTopLevelOverlay(screen); search.requestFocus()
     }
 
     private fun showNowPlaying(track: Track) {
@@ -1553,6 +1571,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     }
                 }
             }.show()
+    }
+
+    private fun showTopLevelOverlay(view: View) {
+        overlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        overlayStack.clear()
+        overlay = view
+        attachOverlay(view)
+        syncHomeSurfaceVisibility()
     }
 
     private fun showOverlay(view: View) {
