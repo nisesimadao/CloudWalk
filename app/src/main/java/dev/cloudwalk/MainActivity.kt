@@ -112,10 +112,12 @@ class MainActivity : Activity(), PlaybackController.Listener {
         uiPrefs = getSharedPreferences("cloudwalk_ui", MODE_PRIVATE)
         lowPowerMode = uiPrefs.getBoolean("low_power", false)
         showingFlow = uiPrefs.getBoolean("home_flow", true) && !lowPowerMode
+        val savedQueue = collections.queue()
         val recentHome = collections.recent()
-        if (recentHome.isNotEmpty()) {
+        val startupQueue = if (savedQueue.isNotEmpty()) savedQueue else recentHome.take(30)
+        if (startupQueue.isNotEmpty()) {
             homeTracks.clear()
-            homeTracks.addAll(recentHome.take(30))
+            homeTracks.addAll(startupQueue)
         }
         cacheSettings = CacheSettings(this)
         sessionCache = SessionAudioCache(this, cacheSettings)
@@ -1418,11 +1420,17 @@ class MainActivity : Activity(), PlaybackController.Listener {
         nowPlayingDuration?.text = formatTime(knownDuration)
     }
 
+    private fun persistQueue() {
+        val snapshot = homeTracks.toList()
+        io.execute { collections.saveQueue(snapshot) }
+    }
+
     private fun updateHomeCollection(items: List<Track>, selectedIndex: Int = 0) {
         if (items.isEmpty()) return
         val snapshot = if (items === homeTracks) ArrayList(items) else items
         homeTracks.clear()
         homeTracks.addAll(snapshot)
+        persistQueue()
         flowView.tracks = homeTracks
         updateQueueFlowHeader()
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
@@ -1523,6 +1531,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     val focusId = focusedTrack?.id
                     homeTracks.clear()
                     homeTracks.addAll(queueItems)
+                    persistQueue()
                     flowView.tracks = homeTracks
                     val focusIndex = homeTracks.indexOfFirst { it.id == focusId }
                     if (focusIndex >= 0) flowView.setSelected(focusIndex, false)
@@ -1607,6 +1616,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         val current = homeTracks.indexOfFirst { it.id == selectedTrack?.id }
                         val insert = if (current >= 0) (current + 1).coerceAtMost(homeTracks.size) else homeTracks.size
                         homeTracks.add(insert, track)
+                        persistQueue()
                         flowView.tracks = homeTracks
                         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                         rebuildShuffleOrder(selectedTrack?.id)
@@ -1659,6 +1669,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     getString(R.string.remove_from_queue) -> {
                         homeTracks.removeAll { it.id == track.id }
                         shuffledTrackIds.remove(track.id)
+                        persistQueue()
                         flowView.tracks = homeTracks
                         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                         updateMediaSessionQueue()

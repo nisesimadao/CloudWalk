@@ -10,6 +10,7 @@ class LocalCollections(context: Context) {
     private val lock = Any()
     @Volatile private var likesCache: List<Track>? = null
     @Volatile private var recentCache: List<Track>? = null
+    @Volatile private var queueCache: List<Track>? = null
 
     fun likes(): List<Track> = likesCache ?: synchronized(lock) {
         likesCache ?: read("likes").also { likesCache = it }
@@ -17,6 +18,16 @@ class LocalCollections(context: Context) {
 
     fun recent(): List<Track> = recentCache ?: synchronized(lock) {
         recentCache ?: read("recent").also { recentCache = it }
+    }
+
+    fun queue(): List<Track> = queueCache ?: synchronized(lock) {
+        queueCache ?: read("queue").also { queueCache = it }
+    }
+
+    fun saveQueue(tracks: List<Track>) = synchronized(lock) {
+        val snapshot = tracks.take(MAX_QUEUE).toList()
+        queueCache = snapshot
+        write("queue", snapshot)
     }
 
     fun isLiked(track: Track): Boolean = likes().any { it.id == track.id }
@@ -82,5 +93,6 @@ class LocalCollections(context: Context) {
     companion object {
         private const val MAX_LIKES = 300
         private const val MAX_RECENT = 50
+        private const val MAX_QUEUE = 120
     }
 }
