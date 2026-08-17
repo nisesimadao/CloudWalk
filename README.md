@@ -25,6 +25,7 @@ CloudWalk is a **tiny native Android SoundCloud client** built for fast startup,
 ## What it does
 
 - Search and play public SoundCloud tracks
+- Import public profile likes or use public uploads as the queue
 - Cover Flow queue browser and native Now Playing UI
 - Queue, reorder, shuffle and repeat
 - Background playback with MediaSession controls

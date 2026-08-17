@@ -572,6 +572,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }, LinearLayout.LayoutParams(-1, dp(24)))
     }
 
+    private fun hideKeyboard() {
+        currentFocus?.let { focused ->
+            val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(focused.windowToken, 0)
+            focused.clearFocus()
+        }
+    }
+
     private fun showHomeTab() {
         val current = overlay
         overlay = null
@@ -1795,6 +1803,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showTopLevelOverlay(view: View, tabIndex: Int) {
+        hideKeyboard()
         val previous = overlay
         val previousTab = currentTopTab
         overlayStack.clear()
