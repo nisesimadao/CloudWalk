@@ -213,10 +213,18 @@ class MainActivity : Activity(), PlaybackController.Listener {
         updateMediaSessionQueue()
     }
 
+    private fun updateQueueFlowHeader() {
+        if (!::homeSectionLabel.isInitialized) return
+        homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
+        homeSectionLabel.isEnabled = homeTracks.isNotEmpty()
+        homeSectionLabel.alpha = if (homeTracks.isNotEmpty()) 1f else 0.5f
+    }
+
     private fun currentQueueOrder(): List<Track> =
         if (shuffleEnabled && shuffledTrackIds.isNotEmpty()) shuffledTrackIds.mapNotNull { id -> homeTracks.firstOrNull { it.id == id } } else homeTracks
 
     private fun updateMediaSessionQueue() {
+        updateQueueFlowHeader()
         if (!::mediaSession.isInitialized) return
         val queue = currentQueueOrder()
         mediaSession.setQueueTitle(if (shuffleEnabled) getString(R.string.queue_title_shuffled) else getString(R.string.queue_title))
@@ -299,6 +307,11 @@ class MainActivity : Activity(), PlaybackController.Listener {
             letterSpacing = 0.08f
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), 0, dp(20), 0)
+            background = selectableBackground()
+            isClickable = true
+            isFocusable = true
+            contentDescription = getString(R.string.queue_flow_open_desc)
+            setOnClickListener { if (homeTracks.isNotEmpty()) showQueue() }
         }
         root.addView(homeSectionLabel, LinearLayout.LayoutParams(-1, dp(38)))
 
@@ -311,6 +324,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             onSelectionChanged = { _, track -> showFocusedTrack(track) }
             onTrackClick = { track -> play(track) }
             onTrackLongClick = { track -> showTrackMenu(track) }
+            playingTrackId = selectedTrack?.id
             contentDescription = getString(R.string.cover_browser)
         }
         contentHost.addView(flowView, FrameLayout.LayoutParams(-1, -1))
@@ -963,7 +977,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             true
         }
         installSwipeToCache(results, displayedItems)
-        showResults(homeTracks)
+        showResults(emptyList())
 
         var pendingSearch: Runnable? = null
         var searchSerial = 0
@@ -1078,7 +1092,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     activePublicQuery = null
                     canLoadMore = false
                     nextPublicOffset = SEARCH_PAGE_SIZE
-                    showResults(if (q.isEmpty()) homeTracks else emptyList())
+                    showResults(emptyList())
                 } else {
                     pendingSearch = Runnable {
                         if (overlay === screen) performSearch(q)
@@ -1265,7 +1279,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         nowPlayingLike?.setColorFilter(if (liked) Color.rgb(255, 123, 38) else Color.WHITE)
         nowPlayingLike?.contentDescription = if (liked) getString(R.string.unlike) else getString(R.string.like)
         val index = homeTracks.indexOfFirst { it.id == track.id }
-        nowPlayingPosition?.text = if (index >= 0) getString(R.string.position_of, index + 1, homeTracks.size) else ""
+        nowPlayingPosition?.text = if (index >= 0) getString(R.string.queue_position, index + 1, homeTracks.size) else ""
         val canWrap = repeatMode == RepeatMode.ALL && homeTracks.size > 1
         val shuffleIndex = if (shuffleEnabled) shuffledTrackIds.indexOf(track.id) else -1
         val canPrev = if (shuffleEnabled) shuffleIndex > 0 || canWrap else index > 0 || canWrap
@@ -1294,7 +1308,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         homeTracks.clear()
         homeTracks.addAll(snapshot)
         flowView.tracks = homeTracks
-        if (::homeSectionLabel.isInitialized) homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
+        updateQueueFlowHeader()
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
         val safeIndex = selectedIndex.coerceIn(0, homeTracks.lastIndex)
         focusedTrack = homeTracks[safeIndex]
@@ -1368,6 +1382,15 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setNavigationIcon(R.drawable.ic_back); navigationContentDescription = getString(R.string.back); setNavigationOnClickListener { closeOverlay() }
         }
         screen.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
+        if (queueItems.isNotEmpty()) {
+            screen.addView(TextView(this).apply {
+                text = getString(R.string.queue_help)
+                textSize = 11f
+                setTextColor(Color.rgb(145, 145, 145))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), 0, dp(20), 0)
+            }, LinearLayout.LayoutParams(-1, dp(30)))
+        }
         if (queueItems.isEmpty()) {
             screen.addView(TextView(this).apply { text = getString(R.string.queue_empty); gravity = Gravity.CENTER; setTextColor(Color.GRAY) }, LinearLayout.LayoutParams(-1, 0, 1f))
         } else {
@@ -1811,7 +1834,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun syncHomeSurfaceVisibility() {
         if (!::contentHost.isInitialized) return
-        if (::homeSectionLabel.isInitialized) homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
+        updateQueueFlowHeader()
         val showHome = overlay == null
         contentHost.visibility = if (showHome) View.VISIBLE else View.GONE
         if (!showHome) {
@@ -1855,6 +1878,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         val changed = selectedTrack?.id != track.id
         selectedTrack = track
         focusedTrack = track
+        if (::flowView.isInitialized) flowView.playingTrackId = track.id
         if (overlay == null) refreshHomeTrackUi(track)
         if (changed) updateMediaSession()
     }

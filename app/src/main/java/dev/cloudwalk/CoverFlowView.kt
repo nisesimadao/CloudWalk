@@ -41,6 +41,12 @@ class CoverFlowView @JvmOverloads constructor(
     var onSelectionChanged: ((Int, Track) -> Unit)? = null
     var onTrackClick: ((Track) -> Unit)? = null
     var onTrackLongClick: ((Track) -> Unit)? = null
+    var playingTrackId: String? = null
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     private val density = resources.displayMetrics.density
     private val coverSize = 168f * density
@@ -132,6 +138,7 @@ class CoverFlowView @JvmOverloads constructor(
         override fun onLongPress(e: MotionEvent) {
             if (tracks.isEmpty() || wasDragging) return
             val index = indexAt(e.x)
+            if (index != selectedIndex) setSelected(index, false)
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
             onTrackLongClick?.invoke(tracks[index])
         }
@@ -240,16 +247,27 @@ class CoverFlowView @JvmOverloads constructor(
         val depth = abs(normalized)
         val scale = 1f - min(depth, 1.5f) * (1f - sideScale)
         val angle = -normalized.coerceIn(-1f, 1f) * maxAngle
-        drawCover(canvas, index, tracks[index], centerX + delta, centerY, scale, angle, index == selectedIndex)
+        val track = tracks[index]
+        drawCover(
+            canvas,
+            index,
+            track,
+            centerX + delta,
+            centerY,
+            scale,
+            angle,
+            index == selectedIndex,
+            track.id == playingTrackId
+        )
     }
 
-    private fun drawCover(canvas: Canvas, index: Int, track: Track, cx: Float, cy: Float, scale: Float, angle: Float, selected: Boolean) {
+    private fun drawCover(canvas: Canvas, index: Int, track: Track, cx: Float, cy: Float, scale: Float, angle: Float, selected: Boolean, playing: Boolean) {
         val size = coverSize * scale
         val half = size * 0.5f
         val turn = (angle / maxAngle).coerceIn(-1f, 1f)
 
         buildPath(coverPath, cx, cy, half, turn, 0f)
-        val drawShadow = selected || resources.configuration.screenWidthDp > 400
+        val drawShadow = selected || playing || resources.configuration.screenWidthDp > 400
         if (drawShadow) {
             buildPath(shadowPath, cx, cy, half, turn, 7f * density)
             paint.style = Paint.Style.FILL
@@ -282,17 +300,23 @@ class CoverFlowView @JvmOverloads constructor(
         }
 
         if (!selected) {
-            paint.color = Color.argb(72, 0, 0, 0)
+            paint.color = Color.argb(if (playing) 38 else 72, 0, 0, 0)
             canvas.drawPath(coverPath, paint)
         }
 
+        if (playing) {
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 3f * density
+            paint.color = Color.rgb(255, 106, 0)
+            canvas.drawPath(coverPath, paint)
+        }
         if (selected) {
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 1.25f * density
-            paint.color = Color.argb(150, 255, 255, 255)
+            paint.strokeWidth = 1.15f * density
+            paint.color = Color.argb(210, 255, 255, 255)
             canvas.drawPath(coverPath, paint)
-            paint.style = Paint.Style.FILL
         }
+        paint.style = Paint.Style.FILL
     }
 
     private fun buildPath(path: Path, cx: Float, cy: Float, half: Float, turn: Float, yOffset: Float) {
