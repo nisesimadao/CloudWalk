@@ -43,6 +43,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var collections: LocalCollections
     private lateinit var localLibrary: LocalLibrary
     private lateinit var mediaSession: MediaSession
+    private lateinit var uiPrefs: android.content.SharedPreferences
     private val authRedirectUri = "cloudwalk://auth/callback"
 
     private lateinit var flowView: CoverFlowView
@@ -107,6 +108,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
         webApi = WebSoundCloudApi(this)
         collections = LocalCollections(this)
         localLibrary = LocalLibrary(this)
+        uiPrefs = getSharedPreferences("cloudwalk_ui", MODE_PRIVATE)
+        lowPowerMode = uiPrefs.getBoolean("low_power", false)
+        showingFlow = uiPrefs.getBoolean("home_flow", true) && !lowPowerMode
         val recentHome = collections.recent()
         if (recentHome.isNotEmpty()) {
             homeTracks.clear()
@@ -118,6 +122,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
         artwork = ArtworkCache(this)
         setupMediaSession()
         setContentView(buildUi())
+        flowView.lowPowerMode = lowPowerMode
+        setViewMode(showingFlow)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(
                 android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT
@@ -663,12 +669,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
             showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
         }
 
-        addSection(getString(R.string.library_soundcloud))
-        if (hasAccount()) {
-            addRow(getString(R.string.soundcloud_likes)) { showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } }
-            addRow(getString(R.string.playlists)) { showPlaylists() }
-        } else {
-            addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
+        if (hasAccount() || authBroker.configured) {
+            addSection(getString(R.string.library_soundcloud))
+            if (hasAccount()) {
+                addRow(getString(R.string.soundcloud_likes)) { showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } }
+                addRow(getString(R.string.playlists)) { showPlaylists() }
+            } else {
+                addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
+            }
         }
 
         scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
@@ -1714,11 +1722,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 flowView.lowPowerMode = false
             }
             setViewMode(true)
+            uiPrefs.edit().putBoolean("low_power", false).putBoolean("home_flow", true).apply()
             if (playing) startProgressTicker()
             dialog.dismiss()
         }
         listRadio.setOnClickListener {
             setViewMode(false)
+            uiPrefs.edit().putBoolean("home_flow", false).apply()
             dialog.dismiss()
         }
         lowPower.setOnCheckedChangeListener { _, enabled ->
@@ -1733,6 +1743,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             } else {
                 updateQueueFlowHeader()
             }
+            uiPrefs.edit().putBoolean("low_power", enabled).putBoolean("home_flow", showingFlow).apply()
             if (playing) startProgressTicker()
             toast(if (enabled) getString(R.string.low_power_on) else getString(R.string.low_power_off))
         }
