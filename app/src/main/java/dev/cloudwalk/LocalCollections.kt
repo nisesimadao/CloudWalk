@@ -32,6 +32,21 @@ class LocalCollections(context: Context) {
 
     fun isLiked(track: Track): Boolean = likes().any { it.id == track.id }
 
+    fun importLikes(tracks: List<Track>): Int = synchronized(lock) {
+        if (tracks.isEmpty()) return@synchronized 0
+        val before = likes()
+        val existing = before.asSequence().map { it.id }.toHashSet()
+        val added = tracks.count { existing.add(it.id) }
+        val merged = ArrayList<Track>(minOf(MAX_LIKES, tracks.size + before.size))
+        val seen = HashSet<String>()
+        (tracks + before).forEach { track ->
+            if (merged.size < MAX_LIKES && seen.add(track.id)) merged += track
+        }
+        likesCache = merged
+        write("likes", merged)
+        added
+    }
+
     fun toggleLike(track: Track): Boolean = synchronized(lock) {
         val current = likes().toMutableList()
         val existing = current.indexOfFirst { it.id == track.id }

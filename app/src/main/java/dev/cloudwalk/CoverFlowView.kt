@@ -22,7 +22,7 @@ class CoverFlowView @JvmOverloads constructor(
         set(value) {
             field = value
             selectedIndex = selectedIndex.coerceIn(0, max(0, value.lastIndex))
-            scrollOffset = selectedIndex * spacing
+            scrollOffset = selectedIndex * pageSpacing
             rebuildColorCache()
             prefetchVisible()
             invalidate()
@@ -50,13 +50,17 @@ class CoverFlowView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
     private val coverSize = 168f * density
-    private val spacing = 90f * density
-    private val sideScale = 0.77f
-    private val maxAngle = 58f
+    private val pageSpacing = 92f * density
+    private val visualSpacing = 112f * density
+    private val sideScale = 0.80f
+    private val maxAngle = 52f
     private val artworkTargetPx = min(320, (168f * density).toInt())
     private val previewArtworkTargetPx = min(96, artworkTargetPx)
     private var scrollOffset = 0f
     private var wasDragging = false
+    private var gestureStartIndex = 0
+    private var flingHandled = false
+    private var lastSelectionHapticAt = 0L
     private var lastPrefetchCenter = -99
     private var lastPrefetchHighQuality = false
     private var windowActive = false
@@ -101,14 +105,21 @@ class CoverFlowView @JvmOverloads constructor(
         override fun onDown(e: MotionEvent): Boolean {
             removeCallbacks(promoteArtworkRunnable)
             wasDragging = false
+            flingHandled = false
+            gestureStartIndex = selectedIndex
             if (!scroller.isFinished) scroller.abortAnimation()
             return true
         }
 
         override fun onScroll(e1: MotionEvent?, e2: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
-            if (abs(distanceX) > abs(distanceY) * 0.7f) {
+            if (abs(distanceX) > abs(distanceY) * 0.72f) {
                 wasDragging = true
-                scrollOffset = (scrollOffset + distanceX).coerceIn(minOffset(), maxOffset())
+                val proposed = scrollOffset + distanceX
+                scrollOffset = when {
+                    proposed < minOffset() -> minOffset()
+                    proposed > maxOffset() -> maxOffset()
+                    else -> proposed
+                }
                 updateSelectionFromOffset()
                 postInvalidateOnAnimation()
             }
@@ -116,15 +127,19 @@ class CoverFlowView @JvmOverloads constructor(
         }
 
         override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-            if (tracks.size < 2) return true
+            if (tracks.size < 2 || abs(velocityX) <= abs(velocityY)) return false
             wasDragging = true
-            scroller.fling(
-                scrollOffset.toInt(), 0,
-                (-velocityX * 0.72f).toInt(), 0,
-                minOffset().toInt(), maxOffset().toInt(),
-                0, 0
-            )
-            postInvalidateOnAnimation()
+            flingHandled = true
+            val velocityDp = abs(velocityX) / density
+            val maxHops = if (resources.configuration.screenWidthDp <= 400) 2 else 3
+            val hops = when {
+                velocityDp >= 2200f -> maxHops
+                velocityDp >= 1150f -> min(2, maxHops)
+                else -> 1
+            }
+            val direction = if (velocityX < 0f) 1 else -1
+            val target = (gestureStartIndex + direction * hops).coerceIn(0, tracks.lastIndex)
+            settleToIndex(target, if (hops > 1) 210 else 165)
             return true
         }
 
@@ -147,9 +162,10 @@ class CoverFlowView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         detector.onTouchEvent(event)
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-            if (scroller.isFinished) snapToNearest()
+            if (!flingHandled && scroller.isFinished) snapToNearest()
+            flingHandled = false
             removeCallbacks(promoteArtworkRunnable)
-            postDelayed(promoteArtworkRunnable, 220L)
+            postDelayed(promoteArtworkRunnable, 190L)
             performClick()
         }
         return true
@@ -225,7 +241,7 @@ class CoverFlowView @JvmOverloads constructor(
 
         val centerX = width * 0.5f
         val centerY = height * 0.48f
-        val centerIndex = (scrollOffset / spacing).roundToInt().coerceIn(0, tracks.lastIndex)
+        val centerIndex = (scrollOffset / pageSpacing).roundToInt().coerceIn(0, tracks.lastIndex)
         val radius = visibleRadius()
         val start = max(0, centerIndex - radius)
         val end = min(tracks.lastIndex, centerIndex + radius)
@@ -242,8 +258,8 @@ class CoverFlowView @JvmOverloads constructor(
     }
 
     private fun drawIndex(canvas: Canvas, index: Int, centerX: Float, centerY: Float) {
-        val delta = index * spacing - scrollOffset
-        val normalized = (delta / spacing).coerceIn(-3f, 3f)
+        val page = scrollOffset / pageSpacing
+        val normalized = (index - page).coerceIn(-3f, 3f)
         val depth = abs(normalized)
         val scale = 1f - min(depth, 1.5f) * (1f - sideScale)
         val angle = -normalized.coerceIn(-1f, 1f) * maxAngle
@@ -252,8 +268,8 @@ class CoverFlowView @JvmOverloads constructor(
             canvas,
             index,
             track,
-            centerX + delta,
-            centerY,
+            centerX + normalized * visualSpacing,
+            centerY + min(depth, 1f) * 5f * density,
             scale,
             angle,
             index == selectedIndex,
@@ -398,19 +414,26 @@ class CoverFlowView @JvmOverloads constructor(
 
     private fun indexAt(x: Float): Int {
         val center = width * 0.5f
-        val raw = (x - center + scrollOffset) / spacing
+        val page = scrollOffset / pageSpacing
+        val raw = page + (x - center) / visualSpacing
         return floor(raw + 0.5f).toInt().coerceIn(0, tracks.lastIndex)
     }
 
     private fun minOffset() = 0f
-    private fun maxOffset() = max(0f, (tracks.size - 1) * spacing)
+    private fun maxOffset() = max(0f, (tracks.size - 1) * pageSpacing)
 
     private fun updateSelectionFromOffset() {
         if (tracks.isEmpty()) return
-        val next = (scrollOffset / spacing).roundToInt().coerceIn(0, tracks.lastIndex)
+        val next = (scrollOffset / pageSpacing).roundToInt().coerceIn(0, tracks.lastIndex)
         if (next != selectedIndex) {
             selectedIndex = next
-            if (wasDragging) performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            if (wasDragging) {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (now - lastSelectionHapticAt >= 55L) {
+                    lastSelectionHapticAt = now
+                    performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                }
+            }
             prefetchVisible(highQuality = false)
             onSelectionChanged?.invoke(next, tracks[next])
         }
@@ -418,9 +441,22 @@ class CoverFlowView @JvmOverloads constructor(
 
     private fun snapToNearest() {
         if (tracks.isEmpty()) return
-        val target = selectedIndex * spacing
-        if (abs(scrollOffset - target) < 1f) return
-        scroller.startScroll(scrollOffset.toInt(), 0, (target - scrollOffset).toInt(), 0, 155)
+        val nearest = (scrollOffset / pageSpacing).roundToInt().coerceIn(0, tracks.lastIndex)
+        settleToIndex(nearest, 145)
+    }
+
+    private fun settleToIndex(index: Int, durationMs: Int) {
+        if (tracks.isEmpty()) return
+        val safe = index.coerceIn(0, tracks.lastIndex)
+        val target = safe * pageSpacing
+        val dx = target - scrollOffset
+        if (abs(dx) < 1f) {
+            scrollOffset = target
+            updateSelectionFromOffset()
+            invalidate()
+            return
+        }
+        scroller.startScroll(scrollOffset.toInt(), 0, dx.toInt(), 0, durationMs)
         postInvalidateOnAnimation()
     }
 
@@ -430,13 +466,12 @@ class CoverFlowView @JvmOverloads constructor(
         selectedIndex = safe
         lastPrefetchHighQuality = false
         prefetchVisible(highQuality = !animate)
-        val target = safe * spacing
+        val target = safe * pageSpacing
         if (animate) {
             wasDragging = true
-            scroller.startScroll(scrollOffset.toInt(), 0, (target - scrollOffset).toInt(), 0, 180)
+            settleToIndex(safe, 170)
             removeCallbacks(promoteArtworkRunnable)
-            postDelayed(promoteArtworkRunnable, 220L)
-            postInvalidateOnAnimation()
+            postDelayed(promoteArtworkRunnable, 190L)
         } else {
             scrollOffset = target
             invalidate()

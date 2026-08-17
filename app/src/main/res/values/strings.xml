@@ -52,4 +52,19 @@ Swipe right on a SoundCloud track to keep it.</string><string name="remove_sessi
 
     <string name="track_list_count">TRACK LIST · %1$d</string>
     <string name="home_view_options">Home view</string>
+
+    <string name="public_profile_import">Import public profile</string>
+    <string name="public_profile_import_help">Import public likes or use a profile’s uploads as your queue. No sign-in needed.</string>
+    <string name="public_profile_url_hint">https://soundcloud.com/username</string>
+    <string name="public_profile_loading">Loading public profile…</string>
+    <string name="public_profile_not_found">That isn’t a public SoundCloud profile</string>
+    <string name="public_profile_failed">Couldn’t load that public profile</string>
+    <string name="import_public_likes">Import public likes · %1$d</string>
+    <string name="use_public_tracks_queue">Use uploads as queue · %1$d</string>
+    <string name="imported_likes">Imported %1$d new likes</string>
+    <string name="no_new_likes">No new likes to import</string>
+    <string name="public_profile_empty">No public likes or playable uploads found</string>
+    <string name="queue_replaced">Queue updated · %1$d tracks</string>
+    <string name="load">Load</string>
+    <string name="caching_badge">CACHING…</string>
 </resources>

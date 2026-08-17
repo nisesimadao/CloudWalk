@@ -52,4 +52,19 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
 
     <string name="track_list_count">曲リスト · %1$d曲</string>
     <string name="home_view_options">ホーム表示</string>
+
+    <string name="public_profile_import">公開プロフィールを取り込む</string>
+    <string name="public_profile_import_help">公開プロフィールのお気に入りを取り込んだり、投稿曲をキューにできます。ログイン不要です。</string>
+    <string name="public_profile_url_hint">https://soundcloud.com/username</string>
+    <string name="public_profile_loading">公開プロフィールを読み込み中…</string>
+    <string name="public_profile_not_found">公開SoundCloudプロフィールではありません</string>
+    <string name="public_profile_failed">公開プロフィールを読み込めませんでした</string>
+    <string name="import_public_likes">公開お気に入りを取り込む · %1$d曲</string>
+    <string name="use_public_tracks_queue">投稿曲をキューにする · %1$d曲</string>
+    <string name="imported_likes">新しく%1$d曲をお気に入りへ取り込みました</string>
+    <string name="no_new_likes">新しく取り込めるお気に入りはありません</string>
+    <string name="public_profile_empty">公開お気に入り・再生可能な投稿曲がありません</string>
+    <string name="queue_replaced">キューを更新しました · %1$d曲</string>
+    <string name="load">読み込む</string>
+    <string name="caching_badge">キャッシュ中…</string>
 </resources>

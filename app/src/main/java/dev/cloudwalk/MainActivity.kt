@@ -91,6 +91,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var nowPlayingShuffle: ImageButton? = null
     private var nowPlayingRepeat: ImageButton? = null
     private var tabMiniRefresh: (() -> Unit)? = null
+    private val cachingTrackIds = HashSet<String>()
+    private var currentTopTab = 0
     private var shuffleEnabled = false
     private enum class RepeatMode { OFF, ALL, ONE }
     private var repeatMode = RepeatMode.OFF
@@ -192,14 +194,22 @@ class MainActivity : Activity(), PlaybackController.Listener {
             .find(text)?.value?.trimEnd('.', ',', ')', ']', '}') ?: return
         if (!isOnline()) { toast(getString(R.string.offline)); return }
         io.execute {
-            val result = runCatching { webApi.resolveTrackUrl(url) }
+            val result = runCatching {
+                val track = webApi.resolveTrackUrl(url)
+                val isProfile = track == null && webApi.resolveProfileUrl(url) != null
+                track to isProfile
+            }
             main.post {
-                result.onSuccess { track ->
-                    if (track != null) {
-                        updateHomeCollection(listOf(track), 0)
-                        play(track)
-                        showNowPlaying(track)
-                    } else toast(getString(R.string.not_public_track))
+                result.onSuccess { (track, isProfile) ->
+                    when {
+                        track != null -> {
+                            updateHomeCollection(listOf(track), 0)
+                            play(track)
+                            showNowPlaying(track)
+                        }
+                        isProfile -> showPublicProfileImport(url)
+                        else -> toast(getString(R.string.not_public_track))
+                    }
                 }.onFailure { toast(getString(R.string.couldnt_open_link)) }
             }
         }
@@ -563,12 +573,26 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showHomeTab() {
-        overlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        val current = overlay
         overlay = null
         overlayStack.clear()
+        currentTopTab = 0
         deferArtworkLoads = false
         tabMiniRefresh = null
         syncHomeSurfaceVisibility()
+        if (current != null) {
+            if (lowPowerMode) {
+                (current.parent as? ViewGroup)?.removeView(current)
+            } else {
+                current.animate().cancel()
+                current.animate()
+                    .alpha(0f)
+                    .translationX(dp(12).toFloat())
+                    .setDuration(120L)
+                    .withEndAction { (current.parent as? ViewGroup)?.removeView(current) }
+                    .start()
+            }
+        }
     }
 
 
@@ -617,7 +641,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         if (topLevelTab != null) {
             screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
             screen.addView(buildBottomNav(topLevelTab), LinearLayout.LayoutParams(-1, dp(64)))
-            showTopLevelOverlay(screen)
+            showTopLevelOverlay(screen, topLevelTab)
         } else {
             showOverlay(screen)
         }
@@ -737,21 +761,20 @@ class MainActivity : Activity(), PlaybackController.Listener {
             showStoredTrackScreen(getString(R.string.recently_played), collections.recent(), getString(R.string.nothing_played))
         }
 
-        if (hasAccount() || authBroker.configured) {
-            addSection(getString(R.string.library_soundcloud))
-            if (hasAccount()) {
-                addRow(getString(R.string.soundcloud_likes)) { showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } }
-                addRow(getString(R.string.playlists)) { showPlaylists() }
-            } else {
-                addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
-            }
+        addSection(getString(R.string.library_soundcloud))
+        addRow(getString(R.string.public_profile_import)) { showPublicProfileImport() }
+        if (hasAccount()) {
+            addRow(getString(R.string.soundcloud_likes)) { showRemoteTrackScreen(getString(R.string.soundcloud_likes)) { api.likedTracks(50) } }
+            addRow(getString(R.string.playlists)) { showPlaylists() }
+        } else if (authBroker.configured) {
+            addRow(getString(R.string.connect_soundcloud)) { showConnectScreen(getString(R.string.soundcloud)) }
         }
 
         scroll.addView(body, ViewGroup.LayoutParams(-1, -2))
         screen.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         screen.addView(buildTabMiniPlayer(), LinearLayout.LayoutParams(-1, dp(52)))
         screen.addView(buildBottomNav(3), LinearLayout.LayoutParams(-1, dp(64)))
-        showTopLevelOverlay(screen)
+        showTopLevelOverlay(screen, 3)
     }
 
 
@@ -992,6 +1015,73 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
     }
 
+    private fun showPublicProfileImport(prefill: String? = null) {
+        val input = EditText(this).apply {
+            hint = getString(R.string.public_profile_url_hint)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine(true)
+            setText(prefill.orEmpty())
+            if (!prefill.isNullOrBlank()) selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.public_profile_import))
+            .setMessage(getString(R.string.public_profile_import_help))
+            .setView(input)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .setPositiveButton(getString(R.string.load)) { _, _ ->
+                val url = input.text.toString().trim()
+                if (!isSoundCloudUrl(url) || !isOnline()) {
+                    toast(if (!isOnline()) getString(R.string.offline) else getString(R.string.public_profile_not_found))
+                    return@setPositiveButton
+                }
+                val loading = AlertDialog.Builder(this)
+                    .setMessage(getString(R.string.public_profile_loading))
+                    .setCancelable(false)
+                    .show()
+                io.execute {
+                    val result = runCatching {
+                        val profile = webApi.resolveProfileUrl(url) ?: error("not_profile")
+                        val likes = webApi.profileLikes(profile, 300)
+                        val uploads = webApi.profileTracks(profile, 120)
+                        Triple(profile, likes, uploads)
+                    }
+                    main.post {
+                        loading.dismiss()
+                        result.onSuccess { (profile, likes, uploads) ->
+                            val labels = ArrayList<String>(2)
+                            val actions = ArrayList<() -> Unit>(2)
+                            if (likes.isNotEmpty()) {
+                                labels += getString(R.string.import_public_likes, likes.size)
+                                actions += {
+                                    val added = collections.importLikes(likes)
+                                    toast(if (added > 0) getString(R.string.imported_likes, added) else getString(R.string.no_new_likes))
+                                }
+                            }
+                            if (uploads.isNotEmpty()) {
+                                labels += getString(R.string.use_public_tracks_queue, uploads.size)
+                                actions += {
+                                    updateHomeCollection(uploads, 0)
+                                    toast(getString(R.string.queue_replaced, uploads.size))
+                                }
+                            }
+                            if (labels.isEmpty()) {
+                                toast(getString(R.string.public_profile_empty))
+                            } else {
+                                AlertDialog.Builder(this)
+                                    .setTitle(profile.username)
+                                    .setItems(labels.toTypedArray()) { _, which -> actions[which].invoke() }
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show()
+                            }
+                        }.onFailure {
+                            toast(if (it.message == "not_profile") getString(R.string.public_profile_not_found) else getString(R.string.public_profile_failed))
+                        }
+                    }
+                }
+            }
+            .show()
+    }
+
     private fun showConnectScreen(sectionTitle: String) {
         val screen = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1170,9 +1260,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
             searchInFlight = true
             io.execute {
                 val publicPaged = !isSoundCloudUrl(q) && !hasAccount()
+                var resolvedProfile = false
                 val attempt = runCatching {
                     if (isSoundCloudUrl(q)) {
-                        webApi.resolveTrackUrl(q)?.let(::listOf).orEmpty()
+                        val track = webApi.resolveTrackUrl(q)
+                        if (track != null) listOf(track) else {
+                            resolvedProfile = webApi.resolveProfileUrl(q) != null
+                            emptyList()
+                        }
                     } else if (hasAccount()) {
                         api.searchTracks(q, SEARCH_PAGE_SIZE)
                     } else {
@@ -1184,6 +1279,10 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     searchInFlight = false
                     if (overlay === screen && serial == searchSerial) {
                         attempt.onSuccess { items ->
+                            if (resolvedProfile) {
+                                showPublicProfileImport(q)
+                                return@onSuccess
+                            }
                             showResults(items)
                             if (items.isEmpty()) {
                                 showSearchStatus(getString(R.string.no_results))
@@ -1236,7 +1335,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         screen.addView(buildTabMiniPlayer { !search.hasFocus() }, LinearLayout.LayoutParams(-1, dp(52)))
         search.setOnQueryTextFocusChangeListener { _, _ -> tabMiniRefresh?.invoke() }
         screen.addView(buildBottomNav(1), LinearLayout.LayoutParams(-1, dp(64)))
-        showTopLevelOverlay(screen); search.requestFocus()
+        showTopLevelOverlay(screen, 1); search.requestFocus()
     }
 
     private fun showNowPlaying(track: Track) {
@@ -1695,12 +1794,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }.show()
     }
 
-    private fun showTopLevelOverlay(view: View) {
-        overlay?.let { (it.parent as? ViewGroup)?.removeView(it) }
+    private fun showTopLevelOverlay(view: View, tabIndex: Int) {
+        val previous = overlay
+        val previousTab = currentTopTab
         overlayStack.clear()
         overlay = view
         attachOverlay(view)
+        if (previous != null && previous !== view) (previous.parent as? ViewGroup)?.removeView(previous)
+        currentTopTab = tabIndex
         syncHomeSurfaceVisibility()
+        animateScreenIn(view, if (tabIndex >= previousTab) 1f else -1f, 14)
     }
 
     private fun showOverlay(view: View) {
@@ -1715,6 +1818,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlay = view
         attachOverlay(view)
         syncHomeSurfaceVisibility()
+        animateScreenIn(view, 1f, 14)
     }
 
     private fun replaceOverlay(view: View) {
@@ -1722,6 +1826,24 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlay = view
         attachOverlay(view)
         syncHomeSurfaceVisibility()
+        animateScreenIn(view, 1f, 10)
+    }
+
+    private fun animateScreenIn(view: View, direction: Float, distanceDp: Int) {
+        if (lowPowerMode) {
+            view.alpha = 1f
+            view.translationX = 0f
+            return
+        }
+        view.animate().cancel()
+        view.alpha = 0f
+        view.translationX = dp(distanceDp).toFloat() * direction
+        view.animate()
+            .alpha(1f)
+            .translationX(0f)
+            .setDuration(150L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator())
+            .start()
     }
 
     private fun attachOverlay(view: View) {
@@ -1758,6 +1880,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             val previous = overlayStack.removeLast()
             overlay = previous
             attachOverlay(previous)
+            animateScreenIn(previous, -1f, 10)
         }
         syncHomeSurfaceVisibility()
     }
@@ -1924,8 +2047,30 @@ class MainActivity : Activity(), PlaybackController.Listener {
         var activeTrack: Track? = null
         var horizontal = false
         var thresholdHaptic = false
-        val trigger = dp(86).toFloat()
-        val maxShift = dp(132).toFloat()
+        var forwardingToList = false
+        val touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+        val trigger = dp(68).toFloat()
+        val maxShift = dp(116).toFloat()
+
+        fun cancelListGesture(event: android.view.MotionEvent) {
+            if (!forwardingToList) return
+            val cancel = android.view.MotionEvent.obtain(event)
+            cancel.action = android.view.MotionEvent.ACTION_CANCEL
+            list.onTouchEvent(cancel)
+            cancel.recycle()
+            list.cancelLongPress()
+            forwardingToList = false
+        }
+
+        fun resetGesture(animateRow: Boolean = true) {
+            if (animateRow) activeRow?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(120L)?.start()
+            list.requestDisallowInterceptTouchEvent(false)
+            activeRow = null
+            activeTrack = null
+            horizontal = false
+            thresholdHaptic = false
+            forwardingToList = false
+        }
 
         list.setOnTouchListener { _, event ->
             when (event.actionMasked) {
@@ -1949,65 +2094,80 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         activeTrack = null
                         activeRow = null
                     }
-                    false
+                    forwardingToList = true
+                    list.onTouchEvent(event)
+                    true
                 }
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - downX
                     val dy = event.y - downY
-                    if (!horizontal && dx > dp(10) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.35f) {
+                    if (activeTrack != null && !horizontal && dx > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.18f) {
                         horizontal = true
+                        cancelListGesture(event)
                         list.requestDisallowInterceptTouchEvent(true)
                     }
                     if (horizontal && dx > 0f) {
                         val shift = dx.coerceAtMost(maxShift)
                         activeRow?.translationX = shift
-                        activeRow?.alpha = 1f - 0.12f * (shift / maxShift)
+                        activeRow?.alpha = 1f - 0.10f * (shift / maxShift)
                         if (shift >= trigger && !thresholdHaptic) {
                             thresholdHaptic = true
                             list.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
-                        } else if (shift < trigger * 0.8f) {
+                        } else if (shift < trigger * 0.78f) {
                             thresholdHaptic = false
                         }
-                        true
-                    } else false
+                    } else if (forwardingToList) {
+                        list.onTouchEvent(event)
+                    }
+                    true
                 }
-                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                android.view.MotionEvent.ACTION_UP -> {
+                    var committed = false
                     if (horizontal) {
                         val dx = event.x - downX
                         val row = activeRow
                         val track = activeTrack
-                        if (event.actionMasked == android.view.MotionEvent.ACTION_UP && dx >= trigger && track != null && !track.streamUrl.isNullOrBlank()) {
+                        if (dx >= trigger && track != null) {
+                            committed = true
                             if (row != null) {
-                                row.animate().translationX(maxShift).alpha(0.88f).setDuration(90).withEndAction {
-                                    row.animate().translationX(0f).alpha(1f).setDuration(150).start()
+                                row.animate().translationX(maxShift).alpha(0.90f).setDuration(70L).withEndAction {
+                                    row.animate().translationX(0f).alpha(1f).setDuration(140L).start()
                                 }.start()
                             }
                             if (playback.isSessionCached(track)) {
                                 toast(getString(R.string.already_cached))
-                            } else {
+                            } else if (cachingTrackIds.add(track.id)) {
                                 toast(getString(R.string.caching_session))
+                                (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
                                 val action = (row?.parent as? View)?.findViewById<TextView>(android.R.id.hint)
                                 playback.keepForSession(track, { percent ->
                                     action?.text = getString(R.string.caching_percent, percent)
                                 }) { ok, message ->
+                                    cachingTrackIds.remove(track.id)
                                     action?.apply {
                                         text = if (ok) getString(R.string.cached_badge) else getString(R.string.cache_badge)
                                         setBackgroundColor(if (ok) Color.rgb(72, 110, 72) else Color.rgb(205, 86, 26))
                                     }
+                                    (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
                                     toast(message)
                                 }
                             }
-                        } else {
-                            row?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(140)?.start()
                         }
-                        list.requestDisallowInterceptTouchEvent(false)
-                        activeRow = null
-                        activeTrack = null
-                        horizontal = false
-                        true
-                    } else false
+                    } else if (forwardingToList) {
+                        list.onTouchEvent(event)
+                    }
+                    resetGesture(animateRow = !committed)
+                    true
                 }
-                else -> false
+                android.view.MotionEvent.ACTION_CANCEL -> {
+                    if (forwardingToList) list.onTouchEvent(event)
+                    resetGesture()
+                    true
+                }
+                else -> {
+                    if (forwardingToList) list.onTouchEvent(event)
+                    true
+                }
             }
         }
     }
@@ -2032,6 +2192,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun setViewMode(flow: Boolean) {
+        val wasFlowVisible = ::flowView.isInitialized && flowView.visibility == View.VISIBLE
         showingFlow = flow && !lowPowerMode
         updateQueueFlowHeader()
         if (homeTracks.isEmpty()) {
@@ -2044,10 +2205,26 @@ class MainActivity : Activity(), PlaybackController.Listener {
             return
         }
         homeEmptyView.visibility = View.GONE
+        val target = if (showingFlow) flowView else listView
+        val changed = wasFlowVisible != showingFlow
         flowView.visibility = if (showingFlow) View.VISIBLE else View.GONE
         listView.visibility = if (showingFlow) View.GONE else View.VISIBLE
         trackInfoPanel.visibility = if (showingFlow) View.VISIBLE else View.GONE
         flowView.setSurfaceActive(overlay == null && showingFlow)
+        if (changed && overlay == null && !lowPowerMode) {
+            target.animate().cancel()
+            target.alpha = 0f
+            target.translationY = dp(6).toFloat()
+            target.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(145L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator())
+                .start()
+        } else {
+            target.alpha = 1f
+            target.translationY = 0f
+        }
     }
 
     private fun play(track: Track) {
@@ -2291,13 +2468,20 @@ class MainActivity : Activity(), PlaybackController.Listener {
             val isCurrent = selectedTrack?.id == track.id
             title.text = if (isCurrent) "▶  ${track.title}" else track.title
             title.setTextColor(if (isCurrent) Color.rgb(255, 123, 38) else Color.WHITE)
-            row.findViewById<TextView>(android.R.id.text2).text = track.artist
+            val subtitle = row.findViewById<TextView>(android.R.id.text2)
             val action = row.findViewById<TextView>(android.R.id.hint)
             when {
                 !track.localUri.isNullOrBlank() -> { action.text = getString(R.string.local_badge); action.setBackgroundColor(Color.rgb(72, 72, 72)) }
                 playback.isSessionCached(track) -> { action.text = getString(R.string.cached_badge); action.setBackgroundColor(Color.rgb(72, 110, 72)) }
+                cachingTrackIds.contains(track.id) -> { action.text = getString(R.string.caching_badge); action.setBackgroundColor(Color.rgb(160, 78, 28)) }
                 playback.canSessionCache(track) -> { action.text = getString(R.string.cache_badge); action.setBackgroundColor(Color.rgb(205, 86, 26)) }
                 else -> { action.text = ""; action.setBackgroundColor(Color.TRANSPARENT) }
+            }
+            subtitle.text = when {
+                !track.localUri.isNullOrBlank() -> "${track.artist} · ${getString(R.string.local_badge)}"
+                playback.isSessionCached(track) -> "${track.artist} · ${getString(R.string.cached_badge)}"
+                cachingTrackIds.contains(track.id) -> "${track.artist} · ${getString(R.string.caching_badge)}"
+                else -> track.artist
             }
             row.findViewById<View?>(android.R.id.icon2)?.setOnTouchListener { handle, event ->
                 onDragTouch?.invoke(position, handle, event) == true

@@ -48,6 +48,57 @@ class WebSoundCloudApi(context: Context) {
         }
     }
 
+    fun resolveProfileUrl(inputUrl: String): SoundCloudPublicProfile? {
+        val soundCloudUrl = if (isShortUrl(inputUrl)) resolveRedirect(inputUrl) else inputUrl
+        val encoded = URLEncoder.encode(soundCloudUrl, StandardCharsets.UTF_8.name())
+        val body = withClientId { id -> get("$base/resolve?url=$encoded&client_id=$id") }
+        val item = JSONObject(body)
+        if (item.optString("kind") != "user") return null
+        val id = item.optLong("id", 0L).takeIf { it > 0 } ?: return null
+        return SoundCloudPublicProfile(
+            id = id,
+            username = item.optString("username").ifBlank { "SoundCloud" },
+            permalinkUrl = item.optString("permalink_url").ifBlank { soundCloudUrl }
+        )
+    }
+
+    fun profileLikes(profile: SoundCloudPublicProfile, limit: Int = 300): List<Track> {
+        val out = ArrayList<Track>(minOf(limit, 300))
+        val seen = HashSet<String>()
+        var offset = 0
+        val safeLimit = limit.coerceIn(1, 300)
+        while (out.size < safeLimit) {
+            val pageLimit = minOf(100, safeLimit - out.size)
+            val body = withClientId { id ->
+                get("$base/users/${profile.id}/likes?client_id=$id&limit=$pageLimit&offset=$offset&linked_partitioning=1")
+            }
+            val arr = JSONObject(body).optJSONArray("collection") ?: break
+            for (i in 0 until arr.length()) {
+                val entry = arr.optJSONObject(i) ?: continue
+                val item = entry.optJSONObject("track") ?: if (entry.optString("kind") == "track") entry else null
+                val track = item?.let(::parseTrack) ?: continue
+                if (seen.add(track.id)) {
+                    out += track
+                    if (out.size >= safeLimit) break
+                }
+            }
+            offset += pageLimit
+            if (arr.length() < pageLimit) break
+        }
+        return out
+    }
+
+    fun profileTracks(profile: SoundCloudPublicProfile, limit: Int = 120): List<Track> {
+        val safeLimit = limit.coerceIn(1, 120)
+        val body = withClientId { id ->
+            get("$base/users/${profile.id}/tracks?client_id=$id&limit=$safeLimit&offset=0&linked_partitioning=1")
+        }
+        val arr = JSONObject(body).optJSONArray("collection") ?: return emptyList()
+        return buildList(arr.length()) {
+            for (i in 0 until arr.length()) arr.optJSONObject(i)?.let(::parseTrack)?.let(::add)
+        }
+    }
+
     fun artistTracks(track: Track, limit: Int = 30): List<Track> {
         val permalink = track.permalinkUrl ?: return emptyList()
         val uri = runCatching { java.net.URI(permalink) }.getOrNull() ?: return emptyList()
@@ -205,3 +256,10 @@ class WebSoundCloudApi(context: Context) {
         private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 9; CloudWalk) AppleWebKit/537.36 Chrome/121 Mobile Safari/537.36"
     }
 }
+
+
+data class SoundCloudPublicProfile(
+    val id: Long,
+    val username: String,
+    val permalinkUrl: String
+)
