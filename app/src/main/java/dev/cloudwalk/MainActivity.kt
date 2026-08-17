@@ -409,7 +409,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         trackInfoPanel.visibility = if (homeTracks.isEmpty()) View.GONE else View.VISIBLE
         root.addView(info, LinearLayout.LayoutParams(-1, dp(60)))
 
-        playerStripView = buildPlayerStrip().apply { visibility = if (homeTracks.isEmpty()) View.GONE else View.VISIBLE }
+        playerStripView = buildPlayerStrip().apply { visibility = if (selectedTrack == null) View.GONE else View.VISIBLE }
         root.addView(playerStripView, LinearLayout.LayoutParams(-1, dp(76)))
         root.addView(buildBottomNav(), LinearLayout.LayoutParams(-1, dp(64)))
         return root
@@ -1068,6 +1068,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun showPublicProfileActions(profile: SoundCloudPublicProfile) {
+        hideKeyboard()
         val labels = arrayOf(
             getString(R.string.import_public_likes_action),
             getString(R.string.use_public_tracks_queue_action)
@@ -1097,6 +1098,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     if (likes.isEmpty()) toast(getString(R.string.public_profile_no_likes)) else {
                         val added = collections.importLikes(likes)
                         toast(if (added > 0) getString(R.string.imported_likes, added) else getString(R.string.no_new_likes))
+                        showLikes()
                     }
                 }.onFailure { toast(getString(R.string.public_profile_failed)) }
             }
@@ -1116,6 +1118,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     if (uploads.isEmpty()) toast(getString(R.string.public_profile_no_uploads)) else {
                         updateHomeCollection(uploads, 0)
                         toast(getString(R.string.queue_replaced, uploads.size))
+                        showHomeTab()
                     }
                 }.onFailure { toast(getString(R.string.public_profile_failed)) }
             }
@@ -1690,11 +1693,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 updateMediaSessionQueue()
             }
 
-            queueAdapter = TrackAdapter(queueItems) { position, _, event ->
+            queueAdapter = TrackAdapter(queueItems) { position, handle, event ->
                 when (event.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         dragIndex = position
                         dragMoved = false
+                        if (!lowPowerMode) handle.animate().scaleX(1.12f).scaleY(1.12f).alpha(1f).setDuration(80L).start()
+                        (handle as? ImageView)?.setColorFilter(Color.rgb(255, 123, 38))
                         list.requestDisallowInterceptTouchEvent(true)
                         true
                     }
@@ -1716,6 +1721,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     }
                     android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
                         if (dragMoved) commitQueueOrder()
+                        handle.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(90L).start()
+                        (handle as? ImageView)?.setColorFilter(Color.rgb(150, 150, 150))
                         dragIndex = -1
                         dragMoved = false
                         list.requestDisallowInterceptTouchEvent(false)
@@ -1839,10 +1846,20 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlayStack.clear()
         overlay = view
         attachOverlay(view)
-        if (previous != null && previous !== view) (previous.parent as? ViewGroup)?.removeView(previous)
+        if (previous != null && previous !== view) {
+            if (lowPowerMode) {
+                (previous.parent as? ViewGroup)?.removeView(previous)
+            } else {
+                previous.animate().cancel()
+                previous.animate().alpha(0f).setDuration(80L).withEndAction {
+                    (previous.parent as? ViewGroup)?.removeView(previous)
+                    previous.alpha = 1f
+                }.start()
+            }
+        }
         currentTopTab = tabIndex
         syncHomeSurfaceVisibility()
-        animateScreenIn(view, if (tabIndex >= previousTab) 1f else -1f, 14)
+        animateScreenIn(view, if (tabIndex >= previousTab) 1f else -1f, 12)
     }
 
     private fun showOverlay(view: View) {
@@ -2086,29 +2103,34 @@ class MainActivity : Activity(), PlaybackController.Listener {
         var activeTrack: Track? = null
         var horizontal = false
         var thresholdHaptic = false
-        var forwardingToList = false
         val touchSlop = android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat()
         val trigger = dp(68).toFloat()
         val maxShift = dp(116).toFloat()
 
-        fun cancelListGesture(event: android.view.MotionEvent) {
-            if (!forwardingToList) return
-            val cancel = android.view.MotionEvent.obtain(event)
-            cancel.action = android.view.MotionEvent.ACTION_CANCEL
-            list.onTouchEvent(cancel)
-            cancel.recycle()
-            list.cancelLongPress()
-            forwardingToList = false
-        }
-
         fun resetGesture(animateRow: Boolean = true) {
-            if (animateRow) activeRow?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(120L)?.start()
+            if (animateRow) {
+                activeRow?.animate()?.cancel()
+                activeRow?.animate()?.translationX(0f)?.alpha(1f)?.setDuration(120L)?.start()
+            }
             list.requestDisallowInterceptTouchEvent(false)
             activeRow = null
             activeTrack = null
             horizontal = false
             thresholdHaptic = false
-            forwardingToList = false
+        }
+
+        fun takeHorizontalGesture(event: android.view.MotionEvent) {
+            if (horizontal) return
+            horizontal = true
+            list.cancelLongPress()
+            val cancel = android.view.MotionEvent.obtain(event).apply {
+                action = android.view.MotionEvent.ACTION_CANCEL
+            }
+            // ListView already received ACTION_DOWN normally. Cancel only that native
+            // gesture once we decide this is our horizontal cache swipe.
+            list.onTouchEvent(cancel)
+            cancel.recycle()
+            list.requestDisallowInterceptTouchEvent(true)
         }
 
         list.setOnTouchListener { _, event ->
@@ -2125,6 +2147,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                             activeTrack = candidate
                             val container = list.getChildAt(position - list.firstVisiblePosition)
                             activeRow = container?.findViewById(android.R.id.content) ?: container
+                            activeRow?.animate()?.cancel()
                         } else {
                             activeTrack = null
                             activeRow = null
@@ -2133,20 +2156,22 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         activeTrack = null
                         activeRow = null
                     }
-                    forwardingToList = true
-                    list.onTouchEvent(event)
-                    true
+                    // Let ListView handle taps, long-press and vertical scrolling normally.
+                    false
                 }
+
                 android.view.MotionEvent.ACTION_MOVE -> {
                     val dx = event.x - downX
                     val dy = event.y - downY
-                    if (activeTrack != null && !horizontal && dx > touchSlop && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.18f) {
-                        horizontal = true
-                        cancelListGesture(event)
-                        list.requestDisallowInterceptTouchEvent(true)
+                    if (activeTrack != null && !horizontal && dx > touchSlop &&
+                        kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.18f
+                    ) {
+                        takeHorizontalGesture(event)
                     }
-                    if (horizontal && dx > 0f) {
-                        val shift = dx.coerceAtMost(maxShift)
+                    if (!horizontal) {
+                        false
+                    } else {
+                        val shift = dx.coerceIn(0f, maxShift)
                         activeRow?.translationX = shift
                         activeRow?.alpha = 1f - 0.10f * (shift / maxShift)
                         if (shift >= trigger && !thresholdHaptic) {
@@ -2155,58 +2180,57 @@ class MainActivity : Activity(), PlaybackController.Listener {
                         } else if (shift < trigger * 0.78f) {
                             thresholdHaptic = false
                         }
-                    } else if (forwardingToList) {
-                        list.onTouchEvent(event)
+                        true
                     }
-                    true
                 }
+
                 android.view.MotionEvent.ACTION_UP -> {
-                    var committed = false
-                    if (horizontal) {
+                    if (!horizontal) {
+                        resetGesture(animateRow = false)
+                        false
+                    } else {
                         val dx = event.x - downX
                         val row = activeRow
                         val track = activeTrack
-                        if (dx >= trigger && track != null) {
-                            committed = true
-                            if (row != null) {
-                                row.animate().translationX(maxShift).alpha(0.90f).setDuration(70L).withEndAction {
-                                    row.animate().translationX(0f).alpha(1f).setDuration(140L).start()
-                                }.start()
-                            }
-                            if (playback.isSessionCached(track)) {
-                                toast(getString(R.string.already_cached))
-                            } else if (cachingTrackIds.add(track.id)) {
-                                toast(getString(R.string.caching_session))
-                                (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
-                                val action = (row?.parent as? View)?.findViewById<TextView>(android.R.id.hint)
-                                playback.keepForSession(track, { percent ->
-                                    action?.text = getString(R.string.caching_percent, percent)
-                                }) { ok, message ->
-                                    cachingTrackIds.remove(track.id)
-                                    action?.apply {
-                                        text = if (ok) getString(R.string.cached_badge) else getString(R.string.cache_badge)
-                                        setBackgroundColor(if (ok) Color.rgb(72, 110, 72) else Color.rgb(205, 86, 26))
-                                    }
+                        val committed = dx >= trigger && track != null
+                        if (committed) {
+                            val targetTrack = track ?: return@setOnTouchListener true
+                            row?.animate()?.cancel()
+                            row?.animate()?.translationX(maxShift)?.alpha(0.90f)?.setDuration(70L)?.withEndAction {
+                                row.animate().translationX(0f).alpha(1f).setDuration(140L).start()
+                            }?.start()
+                            when {
+                                playback.isSessionCached(targetTrack) -> toast(getString(R.string.already_cached))
+                                cachingTrackIds.add(targetTrack.id) -> {
+                                    toast(getString(R.string.caching_session))
                                     (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
-                                    toast(message)
+                                    val action = (row?.parent as? View)?.findViewById<TextView>(android.R.id.hint)
+                                    playback.keepForSession(targetTrack, { percent ->
+                                        action?.text = getString(R.string.caching_percent, percent)
+                                    }) { ok, message ->
+                                        cachingTrackIds.remove(targetTrack.id)
+                                        action?.apply {
+                                            text = if (ok) getString(R.string.cached_badge) else getString(R.string.cache_badge)
+                                            setBackgroundColor(if (ok) Color.rgb(72, 110, 72) else Color.rgb(205, 86, 26))
+                                        }
+                                        (list.adapter as? BaseAdapter)?.notifyDataSetChanged()
+                                        toast(message)
+                                    }
                                 }
                             }
                         }
-                    } else if (forwardingToList) {
-                        list.onTouchEvent(event)
+                        resetGesture(animateRow = !committed)
+                        true
                     }
-                    resetGesture(animateRow = !committed)
-                    true
                 }
+
                 android.view.MotionEvent.ACTION_CANCEL -> {
-                    if (forwardingToList) list.onTouchEvent(event)
+                    val wasHorizontal = horizontal
                     resetGesture()
-                    true
+                    wasHorizontal
                 }
-                else -> {
-                    if (forwardingToList) list.onTouchEvent(event)
-                    true
-                }
+
+                else -> horizontal
             }
         }
     }
@@ -2225,8 +2249,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
         setViewMode(showingFlow)
         if (homeTracks.isNotEmpty()) {
             trackInfoPanel.visibility = if (showingFlow && !lowPowerMode) View.VISIBLE else View.GONE
-            playerStripView.visibility = View.VISIBLE
-            selectedTrack?.let(::refreshHomeTrackUi)
+            val current = selectedTrack
+            playerStripView.visibility = if (current != null) View.VISIBLE else View.GONE
+            if (current != null) {
+                refreshHomeTrackUi(current)
+            } else {
+                focusedTrack?.let { focus ->
+                    titleView.text = focus.title
+                    artistView.text = focus.artist
+                }
+            }
         }
     }
 
