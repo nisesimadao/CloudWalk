@@ -25,7 +25,7 @@ CloudWalkは、**とにかく軽いネイティブAndroid向けSoundCloudクラ�
 ## できること
 
 - SoundCloudの公開曲を検索・再生
-- Cover FlowホームとネイティブなNow Playing画面
+- キューを視覚的にめくれるCover FlowとネイティブなNow Playing画面
 - キュー、並べ替え、シャッフル、リピート
 - MediaSession対応のバックグラウンド再生
 - 一時オフライン再生用のセッションキャッシュ

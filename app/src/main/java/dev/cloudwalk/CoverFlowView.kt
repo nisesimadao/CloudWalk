@@ -40,10 +40,11 @@ class CoverFlowView @JvmOverloads constructor(
 
     var onSelectionChanged: ((Int, Track) -> Unit)? = null
     var onTrackClick: ((Track) -> Unit)? = null
+    var onTrackLongClick: ((Track) -> Unit)? = null
 
     private val density = resources.displayMetrics.density
     private val coverSize = 168f * density
-    private val spacing = 66f * density
+    private val spacing = 90f * density
     private val sideScale = 0.77f
     private val maxAngle = 58f
     private val artworkTargetPx = min(320, (168f * density).toInt())
@@ -123,11 +124,16 @@ class CoverFlowView @JvmOverloads constructor(
 
         override fun onSingleTapUp(e: MotionEvent): Boolean {
             if (tracks.isEmpty() || wasDragging) return true
-            val center = width / 2f
-            val raw = (e.x - center + scrollOffset) / spacing
-            val index = floor(raw + 0.5f).toInt().coerceIn(0, tracks.lastIndex)
+            val index = indexAt(e.x)
             if (index == selectedIndex) onTrackClick?.invoke(tracks[index]) else setSelected(index, true)
             return true
+        }
+
+        override fun onLongPress(e: MotionEvent) {
+            if (tracks.isEmpty() || wasDragging) return
+            val index = indexAt(e.x)
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+            onTrackLongClick?.invoke(tracks[index])
         }
     })
 
@@ -240,12 +246,12 @@ class CoverFlowView @JvmOverloads constructor(
     private fun drawCover(canvas: Canvas, index: Int, track: Track, cx: Float, cy: Float, scale: Float, angle: Float, selected: Boolean) {
         val size = coverSize * scale
         val half = size * 0.5f
-        val skew = (angle / maxAngle) * half * 0.28f
+        val turn = (angle / maxAngle).coerceIn(-1f, 1f)
 
-        buildPath(coverPath, cx, cy, half, skew, 0f)
+        buildPath(coverPath, cx, cy, half, turn, 0f)
         val drawShadow = selected || resources.configuration.screenWidthDp > 400
         if (drawShadow) {
-            buildPath(shadowPath, cx, cy, half, skew, 7f * density)
+            buildPath(shadowPath, cx, cy, half, turn, 7f * density)
             paint.style = Paint.Style.FILL
             paint.color = Color.argb(if (selected) 74 else 38, 0, 0, 0)
             canvas.drawPath(shadowPath, paint)
@@ -259,10 +265,7 @@ class CoverFlowView @JvmOverloads constructor(
             srcPts[2] = bitmap.width.toFloat(); srcPts[3] = 0f
             srcPts[4] = bitmap.width.toFloat(); srcPts[5] = bitmap.height.toFloat()
             srcPts[6] = 0f; srcPts[7] = bitmap.height.toFloat()
-            dstPts[0] = cx - half + skew; dstPts[1] = cy - half
-            dstPts[2] = cx + half + skew; dstPts[3] = cy - half
-            dstPts[4] = cx + half - skew; dstPts[5] = cy + half
-            dstPts[6] = cx - half - skew; dstPts[7] = cy + half
+            fillCoverPoints(dstPts, cx, cy, half, turn, 0f)
             imageMatrix.reset()
             imageMatrix.setPolyToPoly(srcPts, 0, dstPts, 0, 4)
             canvas.drawBitmap(bitmap, imageMatrix, paint)
@@ -292,13 +295,38 @@ class CoverFlowView @JvmOverloads constructor(
         }
     }
 
-    private fun buildPath(path: Path, cx: Float, cy: Float, half: Float, skew: Float, yOffset: Float) {
+    private fun buildPath(path: Path, cx: Float, cy: Float, half: Float, turn: Float, yOffset: Float) {
+        fillCoverPoints(dstPts, cx, cy, half, turn, yOffset)
         path.rewind()
-        path.moveTo(cx - half + skew, cy - half + yOffset)
-        path.lineTo(cx + half + skew, cy - half + yOffset)
-        path.lineTo(cx + half - skew, cy + half + yOffset)
-        path.lineTo(cx - half - skew, cy + half + yOffset)
+        path.moveTo(dstPts[0], dstPts[1])
+        path.lineTo(dstPts[2], dstPts[3])
+        path.lineTo(dstPts[4], dstPts[5])
+        path.lineTo(dstPts[6], dstPts[7])
         path.close()
+    }
+
+    private fun fillCoverPoints(out: FloatArray, cx: Float, cy: Float, half: Float, turn: Float, yOffset: Float) {
+        val amount = abs(turn)
+        val farXInset = half * 0.34f * amount
+        val farYInset = half * 0.18f * amount
+        val leftIsFar = turn > 0f
+
+        if (leftIsFar) {
+            out[0] = cx - half + farXInset; out[1] = cy - half + farYInset + yOffset
+            out[2] = cx + half;             out[3] = cy - half + yOffset
+            out[4] = cx + half;             out[5] = cy + half + yOffset
+            out[6] = cx - half + farXInset; out[7] = cy + half - farYInset + yOffset
+        } else if (turn < 0f) {
+            out[0] = cx - half;             out[1] = cy - half + yOffset
+            out[2] = cx + half - farXInset; out[3] = cy - half + farYInset + yOffset
+            out[4] = cx + half - farXInset; out[5] = cy + half - farYInset + yOffset
+            out[6] = cx - half;             out[7] = cy + half + yOffset
+        } else {
+            out[0] = cx - half; out[1] = cy - half + yOffset
+            out[2] = cx + half; out[3] = cy - half + yOffset
+            out[4] = cx + half; out[5] = cy + half + yOffset
+            out[6] = cx - half; out[7] = cy + half + yOffset
+        }
     }
 
     private fun prefetchVisible(highQuality: Boolean = !wasDragging && scroller.isFinished) {
@@ -341,6 +369,13 @@ class CoverFlowView @JvmOverloads constructor(
         resources.configuration.screenWidthDp <= 360 -> 1
         resources.configuration.screenWidthDp <= 400 -> 2
         else -> 4
+    }
+
+
+    private fun indexAt(x: Float): Int {
+        val center = width * 0.5f
+        val raw = (x - center + scrollOffset) / spacing
+        return floor(raw + 0.5f).toInt().coerceIn(0, tracks.lastIndex)
     }
 
     private fun minOffset() = 0f

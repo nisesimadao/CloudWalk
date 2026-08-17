@@ -9,30 +9,30 @@
     </linearGradient>
     <linearGradient id="orange" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ff9820"/>
-      <stop offset="1" stop-color="#ff5b00"/>
+      <stop offset="1" stop-color="#ff5a00"/>
     </linearGradient>
-    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="28"/>
-    </filter>
+    <filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="28"/></filter>
   </defs>
 
   <rect width="1600" height="520" rx="34" fill="url(#bg)"/>
-  <ellipse cx="170" cy="105" rx="210" ry="120" fill="#ff6500" opacity=".08" filter="url(#soft)"/>
-  <ellipse cx="1430" cy="445" rx="260" ry="120" fill="#ff6500" opacity=".06" filter="url(#soft)"/>
+  <ellipse cx="150" cy="95" rx="210" ry="120" fill="#ff6500" opacity=".08" filter="url(#soft)"/>
+  <ellipse cx="1435" cy="445" rx="260" ry="120" fill="#ff6500" opacity=".06" filter="url(#soft)"/>
 
-  <g transform="translate(80 72) scale(.67)">
-    <path d="M128 292c-48 0-87-38-87-86 0-46 36-83 81-86 18-54 69-92 129-92 72 0 131 54 138 123 46 3 82 41 82 87 0 48-39 87-87 87H128z" fill="#fff" stroke="#1b222a" stroke-width="22" stroke-linejoin="round"/>
+  <!-- mascot: same visual center as the standalone logo -->
+  <g transform="translate(58 88) scale(.67)">
+    <path d="M132 314c-50 0-88-38-88-88 0-47 35-82 81-86 21-62 73-98 135-98 74 0 133 52 141 122 44 6 77 43 77 88 0 48-37 86-87 86H132z" fill="#fff" stroke="#1b222a" stroke-width="22" stroke-linejoin="round"/>
     <g fill="url(#orange)">
-      <rect x="106" y="208" width="24" height="40" rx="12"/><rect x="148" y="188" width="28" height="80" rx="14"/><rect x="194" y="166" width="30" height="124" rx="15"/><rect x="242" y="132" width="34" height="190" rx="17"/><rect x="294" y="174" width="30" height="108" rx="15"/><rect x="340" y="194" width="28" height="68" rx="14"/><circle cx="84" cy="228" r="12"/><circle cx="390" cy="228" r="12"/>
+      <circle cx="100" cy="230" r="11"/><rect x="126" y="210" width="24" height="40" rx="12"/><rect x="164" y="190" width="26" height="80" rx="13"/><rect x="207" y="166" width="28" height="128" rx="14"/><rect x="244" y="130" width="32" height="200" rx="16"/><rect x="285" y="166" width="28" height="128" rx="14"/><rect x="330" y="190" width="26" height="80" rx="13"/><rect x="370" y="210" width="24" height="40" rx="12"/><circle cx="420" cy="230" r="11"/>
     </g>
-    <path d="M202 322c-2 35-18 53-43 70M306 322c5 35 21 56 47 71" fill="none" stroke="#171c22" stroke-width="24" stroke-linecap="round"/>
-    <g stroke="#171c22" stroke-width="12" stroke-linejoin="round"><path d="M105 408c14-28 48-39 76-25 16 8 28 22 32 39-25 23-71 31-108 5z" fill="url(#orange)"/><path d="M318 420c6-31 36-52 67-46 18 4 33 15 42 30-19 28-61 45-101 34z" fill="url(#orange)"/></g>
+    <path d="M210 336c-3 31-20 51-45 67M310 336c5 31 23 53 49 67" fill="none" stroke="#171c22" stroke-width="24" stroke-linecap="round"/>
+    <g stroke="#171c22" stroke-width="12" stroke-linejoin="round"><path d="M116 410c18-27 55-35 84-18 13 8 21 18 24 29-25 24-73 32-109 9z" fill="url(#orange)"/><path d="M316 420c7-30 37-47 68-39 20 5 35 18 42 34-21 27-68 40-106 26z" fill="url(#orange)"/></g>
+    <path d="M132 416c26 10 55 8 79-4M333 423c27 7 55 3 78-10" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
   </g>
 
-  <text x="445" y="210" fill="#f7f8fa" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="105" font-weight="750" letter-spacing="-4">Cloud<tspan fill="#ff6a00">Walk</tspan></text>
-  <text x="452" y="274" fill="#b9c0c8" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="34">Tiny native Android SoundCloud client</text>
+  <text x="445" y="205" fill="#f7f8fa" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="104" font-weight="750" letter-spacing="-4">Cloud<tspan fill="#ff6a00">Walk</tspan></text>
+  <text x="452" y="270" fill="#b9c0c8" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="34">Tiny native Android SoundCloud client</text>
 
-  <g transform="translate(452 322)" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="23" font-weight="600">
+  <g transform="translate(452 320)" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-size="23" font-weight="600">
     <g><rect width="185" height="64" rx="20" fill="#171d24" stroke="#303844"/><circle cx="31" cy="32" r="9" fill="#ff6a00"/><text x="52" y="40" fill="#e9edf2">Native UI</text></g>
     <g transform="translate(205)"><rect width="225" height="64" rx="20" fill="#171d24" stroke="#303844"/><path d="M30 19v26M20 35l10 10 10-10" fill="none" stroke="#ff6a00" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="54" y="40" fill="#e9edf2">Session cache</text></g>
     <g transform="translate(450)"><rect width="205" height="64" rx="20" fill="#171d24" stroke="#303844"/><path d="M23 42c16-4 22-14 22-27-13 1-25 8-28 19 2 3 3 5 6 8z" fill="none" stroke="#ff6a00" stroke-width="4"/><text x="57" y="40" fill="#e9edf2">Low memory</text></g>

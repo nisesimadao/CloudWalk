@@ -49,6 +49,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var listView: ListView
     private lateinit var contentHost: FrameLayout
     private lateinit var homeEmptyView: TextView
+    private lateinit var homeSectionLabel: TextView
     private lateinit var titleView: TextView
     private lateinit var artistView: TextView
     private lateinit var miniTitleView: TextView
@@ -290,15 +291,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
 
         root.addView(buildToolbar(), LinearLayout.LayoutParams(-1, dp(56)))
-        root.addView(TextView(this).apply {
-            text = getString(R.string.your_sound)
+        homeSectionLabel = TextView(this).apply {
+            text = getString(R.string.queue_flow_count, homeTracks.size)
             textSize = 12f
             setTextColor(Color.rgb(174, 174, 174))
             typeface = Typeface.create("sans", Typeface.BOLD)
             letterSpacing = 0.08f
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(20), 0, dp(20), 0)
-        }, LinearLayout.LayoutParams(-1, dp(38)))
+        }
+        root.addView(homeSectionLabel, LinearLayout.LayoutParams(-1, dp(38)))
 
         contentHost = FrameLayout(this)
         root.addView(contentHost, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -308,6 +310,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             tracks = this@MainActivity.homeTracks
             onSelectionChanged = { _, track -> showFocusedTrack(track) }
             onTrackClick = { track -> play(track) }
+            onTrackLongClick = { track -> showTrackMenu(track) }
             contentDescription = getString(R.string.cover_browser)
         }
         contentHost.addView(flowView, FrameLayout.LayoutParams(-1, -1))
@@ -1291,6 +1294,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         homeTracks.clear()
         homeTracks.addAll(snapshot)
         flowView.tracks = homeTracks
+        if (::homeSectionLabel.isInitialized) homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
         val safeIndex = selectedIndex.coerceIn(0, homeTracks.lastIndex)
         focusedTrack = homeTracks[safeIndex]
@@ -1807,6 +1811,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun syncHomeSurfaceVisibility() {
         if (!::contentHost.isInitialized) return
+        if (::homeSectionLabel.isInitialized) homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
         val showHome = overlay == null
         contentHost.visibility = if (showHome) View.VISIBLE else View.GONE
         if (!showHome) {
