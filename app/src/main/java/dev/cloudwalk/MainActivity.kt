@@ -395,14 +395,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
             splitTrack = false
             contentDescription = getString(R.string.playback_position)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    if (fromUser) {
-                        val duration = playback.duration()
-                        if (duration > 0) playback.seekTo((duration * value / 1000L).toInt())
-                    }
-                }
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) = Unit
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) { syncMediaSessionAfterSeek() }
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    val duration = playback.duration()
+                    val value = seekBar?.progress ?: return
+                    if (duration > 0) playback.seekTo((duration * value / 1000L).toInt())
+                    syncMediaSessionAfterSeek()
+                }
             })
         }
         addView(progress, LinearLayout.LayoutParams(-1, dp(24)).apply { marginStart = dp(10); marginEnd = dp(10) })
@@ -1187,11 +1187,17 @@ class MainActivity : Activity(), PlaybackController.Listener {
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
                 if (fromUser) {
-                    val duration = playback.duration(); if (duration > 0) playback.seekTo((duration * value / 1000L).toInt())
+                    val duration = playback.duration()
+                    if (duration > 0) nowPlayingElapsed?.text = formatTime((duration * value / 1000L).toInt())
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) { syncMediaSessionAfterSeek() }
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                val duration = playback.duration()
+                val value = seekBar?.progress ?: return
+                if (duration > 0) playback.seekTo((duration * value / 1000L).toInt())
+                syncMediaSessionAfterSeek()
+            }
         })
         content.addView(seek, LinearLayout.LayoutParams(-1, dp(if (compactNowPlaying) 34 else 42)).apply { topMargin = dp(if (compactNowPlaying) 2 else 8) })
         val timeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
