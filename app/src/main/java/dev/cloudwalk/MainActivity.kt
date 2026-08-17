@@ -74,6 +74,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private var overlay: View? = null
     private val overlayStack = ArrayDeque<View>()
     private var lastBackHandledAt = 0L
+    private var overlayTransitionRunning = false
+    private var lastNowPlayingTrackId: String? = null
     private val overlayBasePadding = java.util.WeakHashMap<View, IntArray>()
     private var deferArtworkLoads = false
     private var nowPlayingScreen: View? = null
@@ -158,6 +160,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun handleBackAction() {
+        if (overlayTransitionRunning) return
         val now = android.os.SystemClock.uptimeMillis()
         if (now - lastBackHandledAt < 150L) return
         lastBackHandledAt = now
@@ -481,6 +484,8 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
         }
         row.addView(playButton, LinearLayout.LayoutParams(dp(52), -1))
+        installPressMotion(playButton, 0.88f)
+        installPressMotion(row, 0.985f)
         addView(row, LinearLayout.LayoutParams(-1, dp(52)))
         updatePlayButton()
     }
@@ -519,17 +524,19 @@ class MainActivity : Activity(), PlaybackController.Listener {
             }
         }
         addView(button, LinearLayout.LayoutParams(dp(48), -1))
+        installPressMotion(button, 0.88f)
+        installPressMotion(this, 0.99f)
         setOnClickListener { selectedTrack?.let(::showNowPlaying) }
 
         val refresh = {
             val track = selectedTrack
             val hasSession = track != null && (playing || playback.duration() > 0) && canShow()
-            visibility = if (hasSession) View.VISIBLE else View.GONE
+            setMotionVisibility(this, hasSession, 6)
             if (track != null && hasSession) {
                 title.text = track.title
                 artist.text = track.artist
                 artwork.load(track.artworkUrl, art, dp(40))
-                button.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+                setMotionIcon(button, if (playing) R.drawable.ic_pause else R.drawable.ic_play)
             }
         }
         tabMiniRefresh = refresh
@@ -553,6 +560,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         isClickable = true
         isFocusable = true
         setOnClickListener { action() }
+        installPressMotion(this, 0.94f)
         val icon = ImageView(this@MainActivity).apply {
             setImageResource(iconRes)
             setColorFilter(if (active) Color.rgb(255, 123, 38) else Color.rgb(165, 165, 165))
@@ -574,9 +582,138 @@ class MainActivity : Activity(), PlaybackController.Listener {
             icon.alpha = 0.65f
             tabLabel.alpha = 0.7f
             post {
-                icon.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(120L).setInterpolator(android.view.animation.DecelerateInterpolator()).start()
-                tabLabel.animate().alpha(1f).setDuration(120L).start()
+                icon.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(145L).setInterpolator(android.view.animation.DecelerateInterpolator(1.6f)).start()
+                tabLabel.animate().alpha(1f).translationY(0f).setDuration(145L).start()
             }
+        }
+    }
+
+    private fun installPressMotion(view: View, pressedScale: Float = 0.92f) {
+        view.setOnTouchListener { target, event ->
+            if (lowPowerMode || !target.isEnabled) return@setOnTouchListener false
+            when (event.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    target.animate().cancel()
+                    target.animate()
+                        .scaleX(pressedScale)
+                        .scaleY(pressedScale)
+                        .alpha(0.82f)
+                        .setDuration(65L)
+                        .start()
+                }
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                    target.animate().cancel()
+                    target.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .alpha(1f)
+                        .setDuration(115L)
+                        .setInterpolator(android.view.animation.DecelerateInterpolator(1.8f))
+                        .start()
+                }
+            }
+            false
+        }
+    }
+
+    private fun setMotionIcon(button: ImageButton, resId: Int) {
+        if (button.tag == resId) return
+        button.tag = resId
+        button.setImageResource(resId)
+        if (lowPowerMode || !button.isLaidOut) {
+            button.scaleX = 1f
+            button.scaleY = 1f
+            button.alpha = 1f
+            return
+        }
+        button.animate().cancel()
+        button.scaleX = 0.76f
+        button.scaleY = 0.76f
+        button.alpha = 0.55f
+        button.animate()
+            .scaleX(1f)
+            .scaleY(1f)
+            .alpha(1f)
+            .setDuration(135L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator(1.8f))
+            .start()
+    }
+
+    private fun setMotionVisibility(view: View, visible: Boolean, distanceDp: Int = 6) {
+        if (lowPowerMode || !view.isLaidOut) {
+            view.animate().cancel()
+            view.visibility = if (visible) View.VISIBLE else View.GONE
+            view.alpha = 1f
+            view.translationY = 0f
+            view.scaleX = 1f
+            view.scaleY = 1f
+            return
+        }
+        if (visible) {
+            if (view.visibility == View.VISIBLE) return
+            view.animate().cancel()
+            view.visibility = View.VISIBLE
+            view.alpha = 0f
+            view.translationY = dp(distanceDp).toFloat()
+            view.scaleX = 1f
+            view.scaleY = 1f
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setDuration(150L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.7f))
+                .start()
+        } else if (view.visibility == View.VISIBLE) {
+            view.animate().cancel()
+            view.animate()
+                .alpha(0f)
+                .translationY(dp(distanceDp / 2).toFloat())
+                .setDuration(95L)
+                .withEndAction {
+                    view.visibility = View.GONE
+                    view.alpha = 1f
+                    view.translationY = 0f
+                    view.scaleX = 1f
+                    view.scaleY = 1f
+                }
+                .start()
+        }
+    }
+
+    private fun resetMotionState(view: View) {
+        view.animate().cancel()
+        view.alpha = 1f
+        view.translationX = 0f
+        view.translationY = 0f
+        view.scaleX = 1f
+        view.scaleY = 1f
+    }
+
+    private fun animateNowPlayingTrackChange() {
+        val cover = nowPlayingArtwork
+        val title = nowPlayingTitle
+        val artist = nowPlayingArtist
+        cover?.animate()?.cancel()
+        title?.animate()?.cancel()
+        artist?.animate()?.cancel()
+        cover?.apply {
+            scaleX = 0.955f
+            scaleY = 0.955f
+            alpha = 0.62f
+            animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(180L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.7f)).start()
+        }
+        title?.apply {
+            translationY = dp(5).toFloat()
+            alpha = 0.35f
+            animate().translationY(0f).alpha(1f).setDuration(155L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.7f)).start()
+        }
+        artist?.apply {
+            translationY = dp(4).toFloat()
+            alpha = 0.3f
+            animate().translationY(0f).alpha(1f).setStartDelay(20L).setDuration(155L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.7f)).start()
         }
     }
 
@@ -1404,6 +1541,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
                     toast(if (liked) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes))
                 }
             }
+            nowPlayingLike?.let { installPressMotion(it, 0.88f) }
             addView(nowPlayingLike, Toolbar.LayoutParams(dp(48), -1).apply { gravity = Gravity.END })
             menu.add(getString(R.string.sleep_timer)).apply {
                 setIcon(R.drawable.ic_sleep)
@@ -1498,6 +1636,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setImageResource(R.drawable.ic_prev); setColorFilter(Color.WHITE); background = selectableBorderlessBackground(); contentDescription = getString(R.string.previous)
             setOnClickListener { playRelative(-1) }
         }
+        nowPlayingPrev?.let { installPressMotion(it, 0.88f) }
         controls.addView(nowPlayingPrev, LinearLayout.LayoutParams(dp(64), dp(64)))
         nowPlayingPlay = ImageButton(this).apply {
             setColorFilter(Color.WHITE); background = selectableBorderlessBackground(); contentDescription = getString(R.string.play_pause)
@@ -1506,11 +1645,13 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 if (current != null && playback.duration() > 0) playback.toggle() else current?.let { play(it) }
             }
         }
+        nowPlayingPlay?.let { installPressMotion(it, 0.84f) }
         controls.addView(nowPlayingPlay, LinearLayout.LayoutParams(dp(80), dp(80)))
         nowPlayingNext = ImageButton(this).apply {
             setImageResource(R.drawable.ic_next); setColorFilter(Color.WHITE); background = selectableBorderlessBackground(); contentDescription = getString(R.string.next)
             setOnClickListener { playRelative(1) }
         }
+        nowPlayingNext?.let { installPressMotion(it, 0.88f) }
         controls.addView(nowPlayingNext, LinearLayout.LayoutParams(dp(64), dp(64)))
         content.addView(controls, LinearLayout.LayoutParams(-1, dp(if (compactNowPlaying) 72 else 92)).apply { topMargin = dp(if (compactNowPlaying) 2 else 8) })
 
@@ -1519,6 +1660,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setImageResource(R.drawable.ic_shuffle); background = selectableBorderlessBackground(); contentDescription = getString(R.string.shuffle)
             setOnClickListener { toggleShuffle() }
         }
+        nowPlayingShuffle?.let { installPressMotion(it, 0.88f) }
         secondary.addView(nowPlayingShuffle, LinearLayout.LayoutParams(dp(56), dp(48)))
         secondary.addView(ImageButton(this).apply {
             setImageResource(R.drawable.ic_queue); setColorFilter(Color.LTGRAY); background = selectableBorderlessBackground(); contentDescription = getString(R.string.queue)
@@ -1528,6 +1670,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setImageResource(R.drawable.ic_repeat); background = selectableBorderlessBackground(); contentDescription = getString(R.string.repeat_off)
             setOnClickListener { cycleRepeatMode() }
         }
+        nowPlayingRepeat?.let { installPressMotion(it, 0.88f) }
         secondary.addView(nowPlayingRepeat, LinearLayout.LayoutParams(dp(56), dp(48)))
         content.addView(secondary, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(if (compactNowPlaying) 0 else 2) })
         screen.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -1539,12 +1682,15 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun refreshNowPlaying(track: Track) {
         if (overlay !== nowPlayingScreen) return
+        val animateTrackChange = lastNowPlayingTrackId != null && lastNowPlayingTrackId != track.id && !lowPowerMode
+        lastNowPlayingTrackId = track.id
         nowPlayingTitle?.text = track.title
         nowPlayingArtist?.text = track.artist
         nowPlayingArtwork?.let { artwork.load(track.artworkUrl, it, dp(if (resources.configuration.screenHeightDp <= 700) 180 else 270)) }
-        nowPlayingPlay?.setImageResource(if (playing && selectedTrack?.id == track.id) R.drawable.ic_pause else R.drawable.ic_play)
+        nowPlayingPlay?.let { setMotionIcon(it, if (playing && selectedTrack?.id == track.id) R.drawable.ic_pause else R.drawable.ic_play) }
+        if (animateTrackChange) animateNowPlayingTrackChange()
         val liked = collections.isLiked(track)
-        nowPlayingLike?.setImageResource(if (liked) R.drawable.ic_like_filled else R.drawable.ic_like)
+        nowPlayingLike?.let { setMotionIcon(it, if (liked) R.drawable.ic_like_filled else R.drawable.ic_like) }
         nowPlayingLike?.setColorFilter(if (liked) Color.rgb(255, 123, 38) else Color.WHITE)
         nowPlayingLike?.contentDescription = if (liked) getString(R.string.unlike) else getString(R.string.like)
         val index = homeTracks.indexOfFirst { it.id == track.id }
@@ -1859,7 +2005,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         currentTopTab = tabIndex
         syncHomeSurfaceVisibility()
-        animateScreenIn(view, if (tabIndex >= previousTab) 1f else -1f, 12)
+        animateScreenIn(view, if (tabIndex >= previousTab) 1f else -1f, 22)
     }
 
     private fun showOverlay(view: View) {
@@ -1874,7 +2020,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlay = view
         attachOverlay(view)
         syncHomeSurfaceVisibility()
-        animateScreenIn(view, 1f, 14)
+        animateOverlayIn(view, 1f, 20)
     }
 
     private fun replaceOverlay(view: View) {
@@ -1882,23 +2028,51 @@ class MainActivity : Activity(), PlaybackController.Listener {
         overlay = view
         attachOverlay(view)
         syncHomeSurfaceVisibility()
-        animateScreenIn(view, 1f, 10)
+        animateOverlayIn(view, 1f, 16)
+    }
+
+    private fun animateOverlayIn(view: View, direction: Float, distanceDp: Int) {
+        if (view === nowPlayingScreen && !lowPowerMode) {
+            view.animate().cancel()
+            view.alpha = 0f
+            view.translationX = 0f
+            view.translationY = dp(34).toFloat()
+            view.scaleX = 0.975f
+            view.scaleY = 0.975f
+            view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(220L)
+                .setInterpolator(android.view.animation.DecelerateInterpolator(1.7f))
+                .start()
+            return
+        }
+        animateScreenIn(view, direction, distanceDp)
     }
 
     private fun animateScreenIn(view: View, direction: Float, distanceDp: Int) {
         if (lowPowerMode) {
             view.alpha = 1f
             view.translationX = 0f
+            view.translationY = 0f
+            view.scaleX = 1f
+            view.scaleY = 1f
             return
         }
         view.animate().cancel()
         view.alpha = 0f
         view.translationX = dp(distanceDp).toFloat() * direction
+        view.scaleX = 0.994f
+        view.scaleY = 0.994f
         view.animate()
             .alpha(1f)
             .translationX(0f)
-            .setDuration(150L)
-            .setInterpolator(android.view.animation.DecelerateInterpolator())
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(175L)
+            .setInterpolator(android.view.animation.DecelerateInterpolator(1.6f))
             .start()
     }
 
@@ -1928,17 +2102,42 @@ class MainActivity : Activity(), PlaybackController.Listener {
     }
 
     private fun closeOverlay() {
+        if (overlayTransitionRunning) return
         deferArtworkLoads = false
         val current = overlay ?: return
-        (current.parent as? ViewGroup)?.removeView(current)
-        overlay = null
-        if (overlayStack.isNotEmpty()) {
-            val previous = overlayStack.removeLast()
-            overlay = previous
+        val previous = if (overlayStack.isNotEmpty()) overlayStack.removeLast() else null
+        overlay = previous
+
+        if (previous != null) {
             attachOverlay(previous)
-            animateScreenIn(previous, -1f, 10)
+            current.bringToFront()
         }
         syncHomeSurfaceVisibility()
+
+        if (lowPowerMode) {
+            (current.parent as? ViewGroup)?.removeView(current)
+            resetMotionState(current)
+            return
+        }
+
+        overlayTransitionRunning = true
+        current.animate().cancel()
+        val nowPlaying = current === nowPlayingScreen
+        current.animate()
+            .alpha(if (nowPlaying) 0.25f else 0f)
+            .translationX(if (nowPlaying) 0f else dp(18).toFloat())
+            .translationY(if (nowPlaying) dp(38).toFloat() else 0f)
+            .scaleX(if (nowPlaying) 0.98f else 0.996f)
+            .scaleY(if (nowPlaying) 0.98f else 0.996f)
+            .setDuration(if (nowPlaying) 165L else 135L)
+            .setInterpolator(android.view.animation.AccelerateInterpolator(1.25f))
+            .withEndAction {
+                (current.parent as? ViewGroup)?.removeView(current)
+                resetMotionState(current)
+                overlayTransitionRunning = false
+                syncHomeSurfaceVisibility()
+            }
+            .start()
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
@@ -2354,14 +2553,14 @@ class MainActivity : Activity(), PlaybackController.Listener {
         miniTitleView.text = track.title
         miniArtistView.text = track.artist
         artwork.load(track.artworkUrl, miniArtwork, dp(48))
-        playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        setMotionIcon(playButton, if (playing) R.drawable.ic_pause else R.drawable.ic_play)
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
         val duration = playback.duration()
         progress.progress = if (duration > 0) (playback.currentPosition() * 1000L / duration).toInt() else 0
     }
 
     private fun updatePlayButton() {
-        if (overlay == null && ::playButton.isInitialized) playButton.setImageResource(if (playing) R.drawable.ic_pause else R.drawable.ic_play)
+        if (overlay == null && ::playButton.isInitialized) setMotionIcon(playButton, if (playing) R.drawable.ic_pause else R.drawable.ic_play)
         if (overlay === nowPlayingScreen) selectedTrack?.let { refreshNowPlaying(it) }
         tabMiniRefresh?.invoke()
     }
