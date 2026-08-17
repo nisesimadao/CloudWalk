@@ -58,6 +58,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private lateinit var playerStripView: View
 
     private var selectedTrack: Track? = null
+    private var focusedTrack: Track? = null
     private var playing = false
     private var showingFlow = true
     private var lowPowerMode = false
@@ -293,7 +294,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         flowView = CoverFlowView(this).apply {
             artworkCache = this@MainActivity.artwork
             tracks = this@MainActivity.homeTracks
-            onSelectionChanged = { _, track -> showTrack(track) }
+            onSelectionChanged = { _, track -> showFocusedTrack(track) }
             onTrackClick = { track -> play(track) }
             contentDescription = getString(R.string.cover_browser)
         }
@@ -1202,7 +1203,9 @@ class MainActivity : Activity(), PlaybackController.Listener {
         homeTracks.addAll(snapshot)
         flowView.tracks = homeTracks
         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
-        flowView.setSelected(selectedIndex.coerceIn(0, homeTracks.lastIndex), false)
+        val safeIndex = selectedIndex.coerceIn(0, homeTracks.lastIndex)
+        focusedTrack = homeTracks[safeIndex]
+        flowView.setSelected(safeIndex, false)
         syncHomeSurfaceVisibility()
         rebuildShuffleOrder(selectedTrack?.id)
         updateMediaSessionQueue()
@@ -1692,16 +1695,26 @@ class MainActivity : Activity(), PlaybackController.Listener {
     private fun showTrack(track: Track) {
         val changed = selectedTrack?.id != track.id
         selectedTrack = track
+        focusedTrack = track
         if (overlay == null) refreshHomeTrackUi(track)
         if (changed) updateMediaSession()
+    }
+
+    private fun showFocusedTrack(track: Track) {
+        focusedTrack = track
+        if (overlay == null && ::titleView.isInitialized) {
+            titleView.text = track.title
+            artistView.text = track.artist
+        }
     }
 
     private fun refreshHomeTrackUi(track: Track) {
         if (!::titleView.isInitialized) return
         trackInfoPanel.visibility = View.VISIBLE
         playerStripView.visibility = View.VISIBLE
-        titleView.text = track.title
-        artistView.text = track.artist
+        val focus = focusedTrack ?: track
+        titleView.text = focus.title
+        artistView.text = focus.artist
         miniTitleView.text = track.title
         miniArtistView.text = track.artist
         artwork.load(track.artworkUrl, miniArtwork, dp(48))
