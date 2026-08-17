@@ -1376,21 +1376,26 @@ class MainActivity : Activity(), PlaybackController.Listener {
                 when (actions[which]) {
                     getString(R.string.play) -> play(track)
                     getString(R.string.play_next) -> {
-                        val current = homeTracks.indexOfFirst { it.id == selectedTrack?.id }.coerceAtLeast(0)
                         val existing = homeTracks.indexOfFirst { it.id == track.id }
                         if (existing >= 0) homeTracks.removeAt(existing)
-                        val insert = (current + 1).coerceAtMost(homeTracks.size)
+                        val current = homeTracks.indexOfFirst { it.id == selectedTrack?.id }
+                        val insert = if (current >= 0) (current + 1).coerceAtMost(homeTracks.size) else homeTracks.size
                         homeTracks.add(insert, track)
                         flowView.tracks = homeTracks
                         (listView.adapter as? BaseAdapter)?.notifyDataSetChanged()
                         rebuildShuffleOrder(selectedTrack?.id)
                         if (shuffleEnabled) {
                             shuffledTrackIds.remove(track.id)
-                            val shuffleCurrent = shuffledTrackIds.indexOf(selectedTrack?.id).coerceAtLeast(0)
-                            shuffledTrackIds.add((shuffleCurrent + 1).coerceAtMost(shuffledTrackIds.size), track.id)
+                            val shuffleCurrent = shuffledTrackIds.indexOf(selectedTrack?.id)
+                            val shuffleInsert = if (shuffleCurrent >= 0) (shuffleCurrent + 1).coerceAtMost(shuffledTrackIds.size) else shuffledTrackIds.size
+                            shuffledTrackIds.add(shuffleInsert, track.id)
                         }
                         updateMediaSessionQueue()
                         toast(getString(R.string.playing_next))
+                        if (allowRemoveFromQueue && overlay != null) {
+                            closeOverlay()
+                            showQueue()
+                        }
                     }
                     getString(R.string.add_to_likes), getString(R.string.remove_from_likes) -> { collections.toggleLike(track); toast(if (collections.isLiked(track)) getString(R.string.added_to_likes) else getString(R.string.removed_from_likes)) }
                     getString(R.string.keep_for_session) -> playback.keepForSession(track) { _, message -> toast(message) }
