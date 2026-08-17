@@ -338,6 +338,7 @@ class CoverFlowView @JvmOverloads constructor(
 
     private fun visibleRadius(): Int = when {
         lowPowerMode -> 1
+        resources.configuration.screenWidthDp <= 360 -> 1
         resources.configuration.screenWidthDp <= 400 -> 2
         else -> 4
     }
