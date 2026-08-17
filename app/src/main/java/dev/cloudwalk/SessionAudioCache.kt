@@ -26,6 +26,11 @@ class SessionAudioCache(
     private val settings: CacheSettings = CacheSettings(context)
 ) {
     private val appContext = context.applicationContext
+    private val userAgent = runCatching {
+        @Suppress("DEPRECATION")
+        val version = appContext.packageManager.getPackageInfo(appContext.packageName, 0).versionName
+        "CloudWalk/${version ?: "unknown"} Android"
+    }.getOrDefault("CloudWalk Android")
     private val rootDir = File(appContext.cacheDir, "session_audio")
     private val dir = File(rootDir, "session_${System.currentTimeMillis()}_${android.os.Process.myPid()}")
     private val hlsDir = File(dir, "hls")
@@ -66,7 +71,7 @@ class SessionAudioCache(
     /** Read-only during playback: only an explicit Keep-for-session action fills this cache. */
     fun playbackDataSourceFactory(headers: Map<String, String>): DataSource.Factory {
         val upstream = DefaultHttpDataSource.Factory()
-            .setUserAgent("CloudWalk/0.1.4 Android")
+            .setUserAgent(userAgent)
             .setDefaultRequestProperties(headers)
         return CacheDataSource.Factory()
             .setCache(hlsCache)
@@ -289,7 +294,7 @@ class SessionAudioCache(
 
     private fun downloadDataSourceFactory(headers: Map<String, String>): CacheDataSource.Factory {
         val upstream = DefaultHttpDataSource.Factory()
-            .setUserAgent("CloudWalk/0.1.4 Android")
+            .setUserAgent(userAgent)
             .setDefaultRequestProperties(headers)
         return CacheDataSource.Factory()
             .setCache(hlsCache)
