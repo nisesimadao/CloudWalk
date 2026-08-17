@@ -1050,7 +1050,45 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setPadding(dp(26), dp(if (compactNowPlaying) 10 else 22), dp(26), dp(if (compactNowPlaying) 8 else 18))
         }
         val coverDp = if (compactNowPlaying) 180 else 270
-        val cover = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP; setBackgroundColor(Color.rgb(45, 45, 45)) }
+        var artworkDownX = 0f
+        var artworkDownY = 0f
+        val cover = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Color.rgb(45, 45, 45))
+            contentDescription = getString(R.string.now_playing_artwork)
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        artworkDownX = event.x
+                        artworkDownY = event.y
+                        view.animate().cancel()
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val dx = event.x - artworkDownX
+                        val dy = event.y - artworkDownY
+                        if (!lowPowerMode && kotlin.math.abs(dx) > kotlin.math.abs(dy)) {
+                            view.translationX = dx.coerceIn(-dp(32).toFloat(), dp(32).toFloat())
+                            view.alpha = (1f - kotlin.math.min(kotlin.math.abs(dx) / dp(420).toFloat(), 0.12f)).coerceAtLeast(0.88f)
+                        }
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> {
+                        val dx = event.x - artworkDownX
+                        val dy = event.y - artworkDownY
+                        val swipe = event.actionMasked == android.view.MotionEvent.ACTION_UP &&
+                            kotlin.math.abs(dx) >= dp(64) && kotlin.math.abs(dx) > kotlin.math.abs(dy) * 1.25f
+                        view.animate().translationX(0f).alpha(1f).setDuration(130L).start()
+                        if (swipe) {
+                            performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                            playRelative(if (dx < 0f) 1 else -1)
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
         nowPlayingArtwork = cover
         content.addView(cover, LinearLayout.LayoutParams(dp(coverDp), dp(coverDp)).apply { bottomMargin = dp(if (compactNowPlaying) 14 else 24) })
         nowPlayingTitle = textLine(if (compactNowPlaying) 21f else 24f, Color.WHITE, true, Gravity.CENTER)
