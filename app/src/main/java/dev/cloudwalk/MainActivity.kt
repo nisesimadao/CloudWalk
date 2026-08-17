@@ -215,8 +215,16 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun updateQueueFlowHeader() {
         if (!::homeSectionLabel.isInitialized) return
-        homeSectionLabel.text = getString(R.string.queue_flow_count, homeTracks.size)
-        homeSectionLabel.isEnabled = homeTracks.isNotEmpty()
+        val flow = showingFlow && !lowPowerMode
+        homeSectionLabel.text = if (flow) {
+            getString(R.string.queue_flow_count, homeTracks.size)
+        } else {
+            getString(R.string.track_list_count, homeTracks.size)
+        }
+        homeSectionLabel.isEnabled = flow && homeTracks.isNotEmpty()
+        homeSectionLabel.isClickable = flow && homeTracks.isNotEmpty()
+        homeSectionLabel.isFocusable = flow && homeTracks.isNotEmpty()
+        homeSectionLabel.contentDescription = if (flow) getString(R.string.queue_flow_open_desc) else getString(R.string.track_list)
         homeSectionLabel.alpha = if (homeTracks.isNotEmpty()) 1f else 0.5f
     }
 
@@ -393,14 +401,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
             setColorFilter(Color.WHITE)
             background = selectableBorderlessBackground()
             contentDescription = getString(R.string.view_options)
-            setOnClickListener { showViewMenu(this) }
-        }, Toolbar.LayoutParams(dp(48), -1).apply { gravity = Gravity.END })
-        addView(ImageButton(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_search)
-            setColorFilter(Color.WHITE)
-            background = selectableBorderlessBackground()
-            contentDescription = getString(R.string.search)
-            setOnClickListener { showSearch() }
+            setOnClickListener { showViewMenu() }
         }, Toolbar.LayoutParams(dp(48), -1).apply { gravity = Gravity.END })
     }
 
@@ -1674,39 +1675,68 @@ class MainActivity : Activity(), PlaybackController.Listener {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() { handleBackAction() }
 
-    private fun showViewMenu(anchor: View) {
-        PopupMenu(this, anchor).apply {
-            menu.add(0, 1, 0, getString(R.string.cover_flow)); menu.add(0, 2, 1, getString(R.string.track_list))
-            menu.add(0, 3, 2, if (lowPowerMode) getString(R.string.disable_low_power) else getString(R.string.enable_low_power))
-            menu.add(0, 5, 3, getString(R.string.session_cache_size))
-            menu.add(0, 6, 4, getString(R.string.sleep_timer))
-            selectedTrack?.takeIf { playback.canSessionCache(it) }?.let { track ->
-                menu.add(0, 4, 4, if (playback.isSessionCached(track)) getString(R.string.cached_for_session) else getString(R.string.keep_for_session))
-            }
-            setOnMenuItemClickListener {
-                when (it.itemId) {
-                    1 -> setViewMode(true)
-                    2 -> setViewMode(false)
-                    3 -> {
-                        lowPowerMode = !lowPowerMode
-                        flowView.lowPowerMode = lowPowerMode
-                        if (playing) startProgressTicker()
-                        toast(if (lowPowerMode) getString(R.string.low_power_on) else getString(R.string.low_power_off))
-                    }
-                    5 -> showCacheSizeDialog()
-                    6 -> showSleepTimerDialog()
-                    4 -> {
-                        val track = selectedTrack
-                        if (track != null) {
-                            toast(getString(R.string.caching_session))
-                            playback.keepForSession(track) { ok, message -> toast(message) }
-                        }
-                    }
-                }
-                true
-            }
-            show()
+    private fun showViewMenu() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(4), dp(20), dp(8))
         }
+        val group = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val flowRadio = RadioButton(this).apply {
+            text = getString(R.string.cover_flow)
+            isChecked = showingFlow && !lowPowerMode
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        val listRadio = RadioButton(this).apply {
+            text = getString(R.string.track_list)
+            isChecked = !showingFlow || lowPowerMode
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        group.addView(flowRadio, RadioGroup.LayoutParams(-1, dp(48)))
+        group.addView(listRadio, RadioGroup.LayoutParams(-1, dp(48)))
+        container.addView(group, LinearLayout.LayoutParams(-1, -2))
+        val lowPower = CheckBox(this).apply {
+            text = getString(R.string.low_power_mode)
+            isChecked = lowPowerMode
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        container.addView(lowPower, LinearLayout.LayoutParams(-1, dp(48)))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.home_view_options))
+            .setView(container)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+
+        flowRadio.setOnClickListener {
+            if (lowPowerMode) {
+                lowPowerMode = false
+                lowPower.isChecked = false
+                flowView.lowPowerMode = false
+            }
+            setViewMode(true)
+            if (playing) startProgressTicker()
+            dialog.dismiss()
+        }
+        listRadio.setOnClickListener {
+            setViewMode(false)
+            dialog.dismiss()
+        }
+        lowPower.setOnCheckedChangeListener { _, enabled ->
+            if (lowPowerMode == enabled) return@setOnCheckedChangeListener
+            lowPowerMode = enabled
+            flowView.lowPowerMode = enabled
+            if (enabled) {
+                showingFlow = false
+                flowRadio.isChecked = false
+                listRadio.isChecked = true
+                setViewMode(false)
+            } else {
+                updateQueueFlowHeader()
+            }
+            if (playing) startProgressTicker()
+            toast(if (enabled) getString(R.string.low_power_on) else getString(R.string.low_power_off))
+        }
+        dialog.show()
     }
 
 
@@ -1902,7 +1932,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         }
         setViewMode(showingFlow)
         if (homeTracks.isNotEmpty()) {
-            trackInfoPanel.visibility = View.VISIBLE
+            trackInfoPanel.visibility = if (showingFlow && !lowPowerMode) View.VISIBLE else View.GONE
             playerStripView.visibility = View.VISIBLE
             selectedTrack?.let(::refreshHomeTrackUi)
         }
@@ -1910,6 +1940,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun setViewMode(flow: Boolean) {
         showingFlow = flow && !lowPowerMode
+        updateQueueFlowHeader()
         if (homeTracks.isEmpty()) {
             flowView.visibility = View.GONE
             listView.visibility = View.GONE
@@ -1922,6 +1953,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
         homeEmptyView.visibility = View.GONE
         flowView.visibility = if (showingFlow) View.VISIBLE else View.GONE
         listView.visibility = if (showingFlow) View.GONE else View.VISIBLE
+        trackInfoPanel.visibility = if (showingFlow) View.VISIBLE else View.GONE
         flowView.setSurfaceActive(overlay == null && showingFlow)
     }
 
@@ -1950,7 +1982,7 @@ class MainActivity : Activity(), PlaybackController.Listener {
 
     private fun refreshHomeTrackUi(track: Track) {
         if (!::titleView.isInitialized) return
-        trackInfoPanel.visibility = View.VISIBLE
+        trackInfoPanel.visibility = if (showingFlow && !lowPowerMode) View.VISIBLE else View.GONE
         playerStripView.visibility = View.VISIBLE
         val focus = focusedTrack ?: track
         titleView.text = focus.title

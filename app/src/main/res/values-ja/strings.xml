@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">CloudWalk</string>
     <string name="auth_broker_url"></string>
-    <string name="your_sound">あなたのサウンド</string><string name="cover_browser">キューのカバーブラウザ。スワイプで選び、中央のカバーをタップで再生、長押しでメニューを開きます。</string><string name="home">ホーム</string><string name="search">検索</string><string name="likes">お気に入り</string><string name="library">ライブラリ</string><string name="back">戻る</string><string name="play_pause">再生 / 一時停止</string><string name="view_options">その他のオプション</string><string name="playback_position">再生位置</string>
+    <string name="your_sound">あなたのサウンド</string><string name="cover_browser">キューのカバーブラウザ。スワイプで選び、中央のカバーをタップで再生、長押しでメニューを開きます。</string><string name="home">ホーム</string><string name="search">検索</string><string name="likes">お気に入り</string><string name="library">ライブラリ</string><string name="back">戻る</string><string name="play_pause">再生 / 一時停止</string><string name="view_options">ホーム表示オプション</string><string name="playback_position">再生位置</string>
     <string name="no_liked_tracks">CloudWalkのお気に入りはまだありません\n曲の♡をタップするとここに保存されます</string><string name="recently_played">最近再生した曲</string><string name="nothing_played">まだ再生履歴がありません</string><string name="loading">読み込み中…</string><string name="nothing_here">まだ何もありません</string>
     <string name="songs_count">曲 · %1$d</string><string name="albums_count">アルバム · %1$d</string><string name="artists_count">アーティスト · %1$d</string><string name="recent_count">最近再生 · %1$d</string><string name="likes_count">お気に入り · %1$d</string><string name="cached_empty">キャッシュ · 空</string><string name="cached_size">キャッシュ · %1$s MB</string><string name="soundcloud_likes">SoundCloudのお気に入り</string><string name="connect_soundcloud">SoundCloudを接続</string>
     <string name="local_files">端末内の曲</string><string name="add">追加</string><string name="remove_from_library">ライブラリから削除</string><string name="no_local_tracks">端末内の曲はまだありません</string><string name="no_local_tracks_help">端末内の曲はまだありません
@@ -47,4 +47,9 @@ SoundCloudの曲を右へスワイプすると保存できます。</string><str
     <string name="library_on_device">端末内</string>
     <string name="library_cloudwalk">CLOUDWALK</string>
     <string name="library_soundcloud">SOUNDCLOUD</string>
+
+    <string name="low_power_mode">低負荷モード</string>
+
+    <string name="track_list_count">曲リスト · %1$d曲</string>
+    <string name="home_view_options">ホーム表示</string>
 </resources>
